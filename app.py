@@ -1,50 +1,62 @@
+import os
 import streamlit as st
-from screener import connect, update, load, rank_stocks, import_csv
+from screener import rank_stocks, import_csv
+from storage import Store
 
-st.set_page_config(page_title='台股盤後選股 V1.0', page_icon='📈', layout='wide')
-st.title('📈 台股盤後選股 V1.0')
-st.caption('TWSE + TPEx 官方每日行情｜研究用途｜不提供自動下單｜不保證隔日上漲')
-st.warning('資料日期必須核對。官方最新快照可能在休市或資料延遲時仍是上一交易日；本版尚未自動驗證官方交易日。')
-conn=connect()
+st.set_page_config(page_title='台股盤後選股 V1.1',page_icon='📈',layout='wide')
+st.title('📈 台股盤後選股 V1.1')
+st.caption('官方可核對歷史資料｜無自動下單｜不保證隔日上漲')
+st.warning('本版自動歷史回補僅涵蓋設定的上市觀察清單；上櫃與全市場歷史回補尚未完成，不能視為全市場前10名。')
+try:
+    url=os.getenv('DATABASE_URL','')
+    if not url:
+        try: url=st.secrets.get('DATABASE_URL','')
+        except Exception: pass
+    db=Store(url=url)
+except Exception as e:
+    st.error(f'資料庫連線失敗：{e}'); st.stop()
 with st.sidebar:
     st.header('選股設定')
     min_history=st.slider('最低歷史交易日數',65,180,65)
-    turnover=st.number_input('20日平均成交金額下限（萬元）',min_value=1000,max_value=100000,value=5000,step=1000)
+    turnover=st.number_input('20日平均成交金額下限（萬元）',1000,100000,5000,1000)
     vol_ratio=st.slider('當日量／20日均量',1.0,4.0,1.5,0.1)
     st.divider()
     st.write('資料維護')
-    confirm=st.checkbox('已核對今日為交易日，且官方最新行情屬於今日')
-    if st.button('手動更新官方快照',disabled=not confirm):
-        with st.spinner('下載官方行情中…'):
-            count, errors=update(conn)
-        if count: st.success(f'寫入 {count} 筆快照；請確認日期與價格')
-        for err in errors: st.error(err)
+    st.info('每日更新由 GitHub Actions 執行；本頁不再提供無法核對日期的快照更新。')
     upload=st.file_uploader('匯入經核對的歷史 CSV',type='csv')
     if upload and st.button('匯入 CSV'):
-        try: st.success(f'匯入 {import_csv(conn,upload.getvalue())} 筆')
+        try:
+            from screener import import_csv
+            import io,pandas as pd
+            frame=pd.read_csv(io.BytesIO(upload.getvalue()),dtype={'code':str,'date':str,'market':str})
+            required=['date','market','code','name','close','volume','amount']
+            if not set(required).issubset(frame.columns): raise ValueError('CSV 欄位不完整')
+            if not frame.date.astype(str).str.fullmatch(r'\d{4}-\d{2}-\d{2}').all(): raise ValueError('日期格式錯誤')
+            if not frame.market.isin(['TWSE','TPEX']).all(): raise ValueError('market 不合法')
+            if not frame.code.str.fullmatch(r'\d{4}').all(): raise ValueError('股票代號不合法')
+            rows=[]
+            for d,m,c,n,p,v,a in frame[required].itertuples(index=False,name=None):
+                if pd.notna(p) and pd.notna(v) and pd.notna(a) and float(p)>0 and float(v)>0 and float(a)>=0:
+                    rows.append((d,m,c,n,float(p),float(v),float(a)))
+            st.success(f'匯入 {db.store(rows)} 筆')
         except Exception as e: st.error(str(e))
-
-prices=load(conn)
+prices=db.load()
 if prices.empty:
-    st.info('資料庫目前沒有行情。請匯入歷史 CSV，或於交易日16:00後核對官方行情再更新。')
+    st.info('資料庫尚無行情。請先在 GitHub Actions 手動執行「Update TWSE History」初始化。')
     st.stop()
-latest=prices['date'].max()
+latest=prices.date.max()
 cols=st.columns(3)
 cols[0].metric('資料最新日期',latest)
-cols[1].metric('累積交易日期數',prices['date'].nunique())
-cols[2].metric('最新快照股票數',len(prices[prices.date==latest]))
-if prices['date'].nunique()<min_history:
-    st.warning(f'歷史日期只有 {prices.date.nunique()} 天；至少需要 {min_history} 個交易日才可篩選。不可把不足的資料當作有效訊號。')
+cols[1].metric('累積交易日期數',prices.date.nunique())
+cols[2].metric('最新資料股票數',len(prices[prices.date==latest]))
+if prices.date.nunique()<min_history: st.warning(f'資料庫只有 {prices.date.nunique()} 個交易日，至少需要 {min_history} 日。')
 results=rank_stocks(prices,min_history,turnover*10000,vol_ratio)
-# The ranking is only for stocks with data on the latest date.
 if not results.empty: results=results[results.date==latest]
-st.subheader('最新交易日候選股')
-if results.empty: st.info('沒有符合條件的股票，或歷史資料仍不足。')
+st.subheader('最新交易日候選股（觀察清單範圍）')
+if results.empty: st.info('觀察清單中目前沒有符合條件的股票，或個股歷史不足。')
 else:
     st.dataframe(results.head(10),use_container_width=True,hide_index=True)
-    st.download_button('下載完整候選股 CSV',results.to_csv(index=False).encode('utf-8-sig'),file_name=f'screen_{latest}.csv',mime='text/csv')
-with st.expander('資料來源、計分及限制'):
-    st.write('上市：TWSE STOCK_DAY_ALL；上櫃：TPEx mainboard_daily_close_quotes。')
-    st.write('條件：收盤價 > MA20 > MA60、突破前20日最高收盤價、成交量放大、MA60正斜率、20日均成交金額達標。')
-    st.write('分數為啟發式技術面排序，並非上漲機率；本版尚未串接三大法人與財報，也沒有策略回測。')
-    st.write('請注意除權息、處置股、下市股票、休市、資料格式變更及歷史資料不完整。')
+    st.download_button('下載候選股 CSV',results.to_csv(index=False).encode('utf-8-sig'),file_name=f'screen_{latest}.csv',mime='text/csv')
+with st.expander('資料來源與限制'):
+    st.write('上市歷史：TWSE STOCK_DAY 單股單月官方查詢；上櫃歷史尚需另行驗證。')
+    st.write('本版不是全市場掃描，分數不是上漲機率；未處理除權息還原、法人、處置股與回測。')
