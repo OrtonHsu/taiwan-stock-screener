@@ -1,0 +1,24 @@
+name: Update TWSE History
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 9 * * 1-5'
+permissions:
+  contents: read
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Backfill or update official dated monthly bars
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TWSE_CODES: ${{ vars.TWSE_CODES }}
+        run: |
+          test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL secret' && exit 1)
+          python history.py --codes "${TWSE_CODES:-2330,2317,2454,2303,2882}" --months 8
