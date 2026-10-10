@@ -1,5 +1,5 @@
 
-"""取得臺灣證券交易所上市普通股清單。"""
+"""取得臺灣證券交易所上市普通股候選清單。"""
 
 import re
 
@@ -32,6 +32,8 @@ def get_twse_stock_codes():
             r"\d{4}",
             str(item.get("Code", "")).strip(),
         )
+        # 排除 0 開頭的 ETF、ETN 等證券代號
+        and not str(item.get("Code", "")).strip().startswith("0")
     })
 
     if len(codes) < 100:
@@ -42,5 +44,5 @@ def get_twse_stock_codes():
 
 if __name__ == "__main__":
     codes = get_twse_stock_codes()
-    print(f"取得 {len(codes)} 個四碼上市證券代號")
+    print(f"取得 {len(codes)} 個上市股票候選代號")
     print(",".join(codes[:20]))
