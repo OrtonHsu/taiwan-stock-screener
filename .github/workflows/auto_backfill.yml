@@ -1,0 +1,56 @@
+
+name: Automatic TWSE History Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: "Number of stocks per batch"
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "10"
+      months:
+        description: "Months of history"
+        required: true
+        default: "4"
+        type: choice
+        options:
+          - "4"
+          - "8"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  auto-backfill:
+    name: Automatic TWSE Backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Select stocks and backfill history
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          MONTHS: ${{ inputs.months }}
+        run: |
+          test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
+          python auto_backfill.py --batch-size "$BATCH_SIZE" --months "$MONTHS"
