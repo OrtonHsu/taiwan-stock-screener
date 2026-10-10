@@ -74,17 +74,20 @@ def parse_month(payload, code, expected_month):
             close = num(item[positions["收盤價"]])
             volume = num(item[positions["成交股數"]])
             amount = num(item[positions["成交金額"]])
-            
-            if any(v is None for v in (close, volume, amount)):
+
+            if close is None or close <= 0:
+                print(f"SKIP {code} {raw}: 無有效收盤價")
+                continue
+
+            if volume is None or amount is None:
                 raise ValueError(
-                    f"行情包含無效數值；日期={raw}；"
-                    f"收盤價={item[positions['收盤價']]!r}；"
-                    f"成交股數={item[positions['成交股數']]!r}；"
-                    f"成交金額={item[positions['成交金額']]!r}"
+                    f"成交量或成交金額格式異常：{raw}"
                 )
 
-            if close <= 0 or volume <= 0 or amount < 0:
-                raise ValueError("行情數值不符合條件")
+            if volume < 0 or amount < 0:
+                raise ValueError(
+                    f"成交量或成交金額不可為負數：{raw}"
+                )
 
             records.append((
                 trading_day.isoformat(),
