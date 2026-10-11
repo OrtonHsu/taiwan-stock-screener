@@ -1,69 +1,69 @@
 
-"""測試櫃買中心上櫃個股歷史行情，不寫入資料庫。"""
+"""診斷櫃買中心新版歷史行情頁面，不寫入資料庫。"""
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
+import re
 import requests
 
-URL = (
-    "https://www.tpex.org.tw/web/stock/aftertrading/"
-    "daily_trading_info/st43_result.php"
+BASE = "https://www.tpex.org.tw"
+PAGE = (
+    BASE
+    + "/zh-tw/mainboard/trading/info/"
+    + "stock-pricing.html"
 )
 
-now = datetime.now(ZoneInfo("Asia/Taipei"))
-roc_year = now.year - 1911
-
-# 先測試前一個完整月份
-year = now.year
-month = now.month - 1
-if month == 0:
-    year -= 1
-    month = 12
-
-period = f"{year - 1911}/{month:02d}"
-
-params = {
-    "l": "zh-tw",
-    "d": period,
-    "stkno": "1240",
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "text/html,application/json,*/*",
 }
 
-print(f"測試股票：1240")
-print(f"測試月份：{period}")
+def main():
+    with requests.Session() as session:
+        response = session.get(
+            PAGE,
+            params={"code": "1240"},
+            headers=HEADERS,
+            timeout=45,
+        )
+        response.raise_for_status()
 
-response = requests.get(
-    URL,
-    params=params,
-    headers={
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Referer": "https://www.tpex.org.tw/",
-    },
-    timeout=45,
-)
-response.raise_for_status()
+        print("HTTP 狀態：", response.status_code)
+        print(
+            "回傳格式：",
+            response.headers.get("Content-Type"),
+        )
+        print("最終網址：", response.url)
+        print("網頁長度：", len(response.content))
 
-print(f"HTTP 狀態：{response.status_code}")
-print(f"回傳格式：{response.headers.get('Content-Type')}")
+        html = response.text
 
-try:
-    data = response.json()
-except ValueError:
-    print("官方未回傳 JSON，內容前 500 字：")
-    print(response.text[:500])
-    raise
+        # 找出網頁中可能使用的資料接口
+        patterns = [
+            r'["\']([^"\']*stock-pricing[^"\']*)["\']',
+            r'["\']([^"\']*\.csv[^"\']*)["\']',
+            r'["\']([^"\']*\.json[^"\']*)["\']',
+            r'["\']([^"\']*/api/[^"\']*)["\']',
+        ]
 
-if not isinstance(data, dict):
-    raise ValueError("官方回傳格式不是預期的物件")
+        found = set()
 
-print("官方欄位：", list(data.keys()))
-print("資料狀態：", data.get("stat"))
-print("欄位名稱：", data.get("fields"))
+        for pattern in patterns:
+            for match in re.findall(
+                pattern, html, flags=re.IGNORECASE
+            ):
+                if len(match) < 300:
+                    found.add(match)
 
-rows = data.get("aaData", data.get("data", []))
-if not isinstance(rows, list) or not rows:
-    raise ValueError("沒有取得歷史行情，需確認 API 格式")
+        print("可能的資料接口：")
+        for item in sorted(found)[:30]:
+            print(item)
 
-print(f"成功取得 {len(rows)} 筆歷史行情")
-print("第一筆資料：", rows[0])
+        print("找到候選接口數量：", len(found))
+
+        if not found:
+            print("網頁未直接提供接口，需進一步分析 JS")
+
+        print("診斷完成，沒有寫入資料庫")
+
+
+if __name__ == "__main__":
+    main()
