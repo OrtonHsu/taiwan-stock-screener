@@ -1,0 +1,43 @@
+
+name: Automatic TPEx History Backfill
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-tpex-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  auto-tpex-backfill:
+    name: Automatic TPEx Backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas psycopg[binary]
+
+      - name: Backfill TPEx history to Supabase
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python auto_tpex_backfill.py \
+            --batch-size 5 \
+            --months 4 \
+            --write
