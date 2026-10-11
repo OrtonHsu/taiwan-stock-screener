@@ -1,8 +1,9 @@
 
-"""搜尋櫃買中心歷史行情 API 線索，不寫入資料庫。"""
+"""檢查櫃買中心歷史行情頁面的查詢與下載設定。"""
 
 import re
-from urllib.parse import urljoin, urlparse
+from html import unescape
+from urllib.parse import urljoin
 
 import requests
 
@@ -11,105 +12,128 @@ PAGE = (
     "trading/info/stock-pricing.html"
 )
 
-KEYWORDS = (
-    "stock-pricing",
-    "stock_pricing",
-    "st43",
-    "download",
-    "csv",
-    "history",
-    "historical",
-    "api/",
-    "api?",
-    "ajax",
-)
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "*/*",
+    "Accept": "text/html,*/*",
 }
 
+KEYWORDS = (
+    "stock-pricing",
+    "download",
+    "csv",
+    "query",
+    "export",
+    "form",
+    "action",
+    "api",
+)
 
-def get_text(session, url):
-    response = session.get(url, timeout=35)
-    response.raise_for_status()
-    return response.text
+
+def clean(text):
+    text = unescape(text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()[:500]
 
 
 def main():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    html = get_text(session, PAGE + "?code=1240")
+    response = session.get(
+        PAGE,
+        params={"code": "1240"},
+        timeout=45,
+    )
+    response.raise_for_status()
 
-    scripts = re.findall(
-        r'<script\b[^>]*\bsrc=["\']([^"\']+)["\']',
+    html = response.text
+
+    print("HTTP 狀態：", response.status_code)
+    print("網頁網址：", response.url)
+    print("HTML 長度：", len(html))
+
+    print("\n===== 查詢表單 =====")
+
+    forms = re.findall(
+        r"<form\b.*?</form\s*>",
         html,
-        flags=re.IGNORECASE,
+        flags=re.I | re.S,
     )
 
-    scripts = list(dict.fromkeys(scripts))
+    print("表單數量：", len(forms))
 
-    print("找到 JS 檔案數量：", len(scripts))
+    for index, form in enumerate(forms[:10], 1):
+        opening = re.search(r"<form\b[^>]*>", form, re.I | re.S)
 
-    for index, src in enumerate(scripts, 1):
-        url = urljoin(PAGE, src)
+        if opening:
+            print(f"表單 {index}：", clean(opening.group()))
 
-        if urlparse(url).hostname != "www.tpex.org.tw":
-            continue
-
-        print(f"\n===== JS {index} =====")
-        print("檔案網址：", url)
-
-        try:
-            content = get_text(session, url)
-        except requests.RequestException as error:
-            print("下載失敗：", str(error)[:150])
-            continue
-
-        if len(content) > 2_000_000:
-            print("檔案過大，略過")
-            continue
-
-        lines = content.splitlines()
-        matched = []
-
-        for line_number, line in enumerate(lines, 1):
-            lower = line.lower()
-
-            if any(word in lower for word in KEYWORDS):
-                matched.append((line_number, line.strip()))
-
-        print("符合關鍵字行數：", len(matched))
-
-        for line_number, line in matched[:12]:
-            print(f"第 {line_number} 行：")
-            print(line[:600])
-
-        # 額外尋找可能的 API 路徑
-        paths = re.findall(
-            r'["\']([^"\']{3,250})["\']',
-            content,
+        controls = re.findall(
+            r"<(?:input|select|button)\b[^>]*>",
+            form,
+            flags=re.I | re.S,
         )
 
-        candidates = sorted({
-            path
-            for path in paths
-            if any(word in path.lower() for word in KEYWORDS)
-            and (
-                "/" in path
-                or ".csv" in path.lower()
-            )
-        })
+        for control in controls[:25]:
+            print("欄位：", clean(control))
 
-        if candidates:
-            print("可能的資料路徑：")
+    print("\n===== 下載連結 =====")
 
-            for path in candidates[:20]:
-                print(path[:250])
+    links = re.findall(
+        r"<a\b[^>]*>.*?</a\s*>",
+        html,
+        flags=re.I | re.S,
+    )
 
-    print("\n診斷完成，沒有寫入資料庫。")
-    print("本次僅搜尋線索，尚未驗證下載接口。")
+    matched_links = [
+        link for link in links
+        if any(word in link.lower() for word in KEYWORDS)
+    ]
+
+    print("候選連結數量：", len(matched_links))
+
+    for link in matched_links[:15]:
+        print(clean(link))
+
+    print("\n===== 網頁內嵌設定 =====")
+
+    scripts = re.findall(
+        r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>",
+        html,
+        flags=re.I | re.S,
+    )
+
+    print("內嵌程式區塊：", len(scripts))
+
+    for index, script in enumerate(scripts, 1):
+        lines = script.splitlines()
+
+        for number, line in enumerate(lines, 1):
+            if any(word in line.lower() for word in KEYWORDS):
+                print(
+                    f"區塊 {index} 第 {number} 行：",
+                    clean(line),
+                )
+
+    print("\n===== HTML 資料屬性 =====")
+
+    attributes = re.findall(
+        r'(?:data-[\w-]+|(?:href|action))'
+        r'\s*=\s*["\'][^"\']+["\']',
+        html,
+        flags=re.I,
+    )
+
+    candidates = [
+        item for item in attributes
+        if any(word in item.lower() for word in KEYWORDS)
+    ]
+
+    for item in candidates[:30]:
+        print(clean(item))
+
+    print("\n診斷完成。")
+    print("沒有下載歷史資料，也沒有寫入資料庫。")
 
 
 if __name__ == "__main__":
