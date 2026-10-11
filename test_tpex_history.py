@@ -1,9 +1,8 @@
 
-"""檢查櫃買中心歷史行情頁面的查詢與下載設定。"""
+"""確認櫃買中心歷史行情 API 網址格式，不寫入資料庫。"""
 
 import re
-from html import unescape
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -14,25 +13,45 @@ PAGE = (
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "text/html,*/*",
+    "Accept": "*/*",
 }
 
 KEYWORDS = (
-    "stock-pricing",
-    "download",
-    "csv",
-    "query",
-    "export",
-    "form",
-    "action",
-    "api",
+    "API_PATTERN",
+    "afterTrading/tradingStock",
+    "tables.init",
+    "data-format",
 )
 
 
-def clean(text):
-    text = unescape(text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()[:500]
+def show_matches(label, content):
+    print(f"\n===== {label} =====")
+
+    count = 0
+
+    for keyword in KEYWORDS:
+        matches = list(
+            re.finditer(
+                re.escape(keyword),
+                content,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        print(f"{keyword}：找到 {len(matches)} 處")
+
+        for match in matches[:3]:
+            start = max(0, match.start() - 350)
+            end = min(len(content), match.end() + 450)
+
+            snippet = content[start:end]
+            snippet = snippet.replace("\n", " ")
+            snippet = re.sub(r"\s+", " ", snippet)
+
+            print("前後程式碼：", snippet[:900])
+            count += 1
+
+    print("輸出片段數量：", count)
 
 
 def main():
@@ -48,92 +67,56 @@ def main():
 
     html = response.text
 
-    print("HTTP 狀態：", response.status_code)
-    print("網頁網址：", response.url)
-    print("HTML 長度：", len(html))
-
-    print("\n===== 查詢表單 =====")
-
-    forms = re.findall(
-        r"<form\b.*?</form\s*>",
-        html,
-        flags=re.I | re.S,
-    )
-
-    print("表單數量：", len(forms))
-
-    for index, form in enumerate(forms[:10], 1):
-        opening = re.search(r"<form\b[^>]*>", form, re.I | re.S)
-
-        if opening:
-            print(f"表單 {index}：", clean(opening.group()))
-
-        controls = re.findall(
-            r"<(?:input|select|button)\b[^>]*>",
-            form,
-            flags=re.I | re.S,
-        )
-
-        for control in controls[:25]:
-            print("欄位：", clean(control))
-
-    print("\n===== 下載連結 =====")
-
-    links = re.findall(
-        r"<a\b[^>]*>.*?</a\s*>",
-        html,
-        flags=re.I | re.S,
-    )
-
-    matched_links = [
-        link for link in links
-        if any(word in link.lower() for word in KEYWORDS)
-    ]
-
-    print("候選連結數量：", len(matched_links))
-
-    for link in matched_links[:15]:
-        print(clean(link))
-
-    print("\n===== 網頁內嵌設定 =====")
+    print("官方網頁狀態：", response.status_code)
+    show_matches("HTML", html)
 
     scripts = re.findall(
-        r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>",
+        r'<script\b[^>]*\bsrc=["\']([^"\']+)["\']',
         html,
-        flags=re.I | re.S,
+        flags=re.IGNORECASE,
     )
 
-    print("內嵌程式區塊：", len(scripts))
+    scripts = list(dict.fromkeys(scripts))
 
-    for index, script in enumerate(scripts, 1):
-        lines = script.splitlines()
+    print("\n找到 JS 數量：", len(scripts))
 
-        for number, line in enumerate(lines, 1):
-            if any(word in line.lower() for word in KEYWORDS):
-                print(
-                    f"區塊 {index} 第 {number} 行：",
-                    clean(line),
-                )
+    for index, src in enumerate(scripts, 1):
+        url = urljoin(response.url, src)
 
-    print("\n===== HTML 資料屬性 =====")
+        if urlparse(url).hostname != "www.tpex.org.tw":
+            continue
 
-    attributes = re.findall(
-        r'(?:data-[\w-]+|(?:href|action))'
-        r'\s*=\s*["\'][^"\']+["\']',
-        html,
-        flags=re.I,
-    )
+        try:
+            js_response = session.get(
+                url,
+                timeout=30,
+            )
+            js_response.raise_for_status()
 
-    candidates = [
-        item for item in attributes
-        if any(word in item.lower() for word in KEYWORDS)
-    ]
+            if len(js_response.content) > 2_000_000:
+                print("略過大型 JS：", url)
+                continue
 
-    for item in candidates[:30]:
-        print(clean(item))
+            content = js_response.text
+
+            if not any(
+                keyword.lower() in content.lower()
+                for keyword in KEYWORDS
+            ):
+                continue
+
+            print("\nJS 網址：", url)
+            show_matches(
+                f"JavaScript {index}",
+                content,
+            )
+
+        except requests.RequestException as error:
+            print("讀取失敗：", str(error)[:200])
 
     print("\n診斷完成。")
-    print("沒有下載歷史資料，也沒有寫入資料庫。")
+    print("沒有寫入資料庫。")
+    print("尚未驗證歷史行情 API 回傳資料。")
 
 
 if __name__ == "__main__":
