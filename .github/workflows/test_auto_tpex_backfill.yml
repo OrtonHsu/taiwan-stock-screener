@@ -1,0 +1,40 @@
+
+name: Test Automatic TPEx Backfill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tpex-auto-backfill-test
+  cancel-in-progress: false
+
+jobs:
+  test-auto-tpex:
+    name: Test TPEx Automatic Selection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas psycopg[binary]
+
+      - name: Test automatic TPEx selection
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python auto_tpex_backfill.py \
+            --batch-size 5 \
+            --months 4
