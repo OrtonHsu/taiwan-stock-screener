@@ -1,98 +1,152 @@
 
-"""測試櫃買中心上櫃股票月歷史行情 API。"""
+"""檢查櫃買中心歷史行情查詢參數，不寫入資料庫。"""
 
-import json
+import re
+from urllib.parse import urljoin
 import requests
 
-API = "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock"
+PAGE = (
+    "https://www.tpex.org.tw/zh-tw/mainboard/"
+    "trading/info/stock-pricing.html"
+)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": (
-        "https://www.tpex.org.tw/zh-tw/mainboard/"
-        "trading/info/stock-pricing.html"
-    ),
+    "Accept": "text/html,*/*",
 }
 
-# 同時測試民國年月與西元年月。
-TESTS = [
-    {"code": "1240", "date": "115/09"},
-    {"code": "1240", "date": "2026/09"},
-    {"code": "1240", "date": "115/09/01"},
-    {"code": "1240", "date": "2026-09"},
-]
+WORDS = (
+    "tables.init",
+    "afterTrading/tradingStock",
+    "tables-form",
+    "date",
+    "code",
+    "parameter",
+    "params",
+    "serialize",
+    "query",
+    "request",
+)
 
 
-def inspect_response(response):
-    print("HTTP 狀態：", response.status_code)
-    print("最終網址：", response.url)
-    print("資料類型：", response.headers.get("Content-Type"))
-    print("回傳長度：", len(response.content))
+def show_context(title, content, keywords, radius=400):
+    print("\n=====", title, "=====")
 
-    try:
-        data = response.json()
-    except ValueError:
-        print("不是 JSON，回傳前 600 字：")
-        print(response.text[:600])
-        return
-
-    if isinstance(data, dict):
-        print("JSON 欄位：", list(data.keys())[:30])
-
-        for key, value in data.items():
-            if isinstance(value, list):
-                print(f"{key} 筆數：", len(value))
-                print(
-                    "前兩筆：",
-                    json.dumps(
-                        value[:2],
-                        ensure_ascii=False,
-                    )[:1800],
-                )
-            elif isinstance(value, dict):
-                print(
-                    f"{key} 內容：",
-                    json.dumps(
-                        value,
-                        ensure_ascii=False,
-                    )[:600],
-                )
-            else:
-                print(f"{key}：", str(value)[:300])
-
-    elif isinstance(data, list):
-        print("JSON 陣列筆數：", len(data))
-        print(
-            "前兩筆：",
-            json.dumps(
-                data[:2],
-                ensure_ascii=False,
-            )[:1800],
+    for keyword in keywords:
+        matches = list(
+            re.finditer(
+                re.escape(keyword),
+                content,
+                flags=re.IGNORECASE,
+            )
         )
-    else:
-        print("JSON 內容：", str(data)[:600])
+
+        print(f"{keyword}: {len(matches)} 處")
+
+        for match in matches[:3]:
+            start = max(0, match.start() - radius)
+            end = min(len(content), match.end() + radius)
+            snippet = re.sub(
+                r"\s+", " ", content[start:end]
+            )
+            print("內容:", snippet[:1000])
 
 
 def main():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    for index, params in enumerate(TESTS, 1):
-        print("\n" + "=" * 50)
-        print(f"第 {index} 組參數：", params)
+    response = session.get(
+        PAGE,
+        params={"code": "1240"},
+        timeout=45,
+    )
+    response.raise_for_status()
+
+    html = response.text
+
+    print("網頁 HTTP:", response.status_code)
+
+    forms = re.findall(
+        r"<form\b.*?</form\s*>",
+        html,
+        flags=re.I | re.S,
+    )
+
+    print("\n===== 完整表單設定 =====")
+
+    for form in forms:
+        if "tables-form" not in form:
+            continue
+
+        for tag in re.findall(
+            r"<(?:form|input|select|option|button)\b[^>]*>",
+            form,
+            flags=re.I | re.S,
+        ):
+            print(re.sub(r"\s+", " ", tag)[:700])
+
+    scripts = re.findall(
+        r"<script\b[^>]*>(.*?)</script\s*>",
+        html,
+        flags=re.I | re.S,
+    )
+
+    for script in scripts:
+        if "afterTrading/tradingStock" in script:
+            show_context(
+                "歷史行情初始化設定",
+                script,
+                WORDS,
+                radius=800,
+            )
+
+    sources = re.findall(
+        r'<script\b[^>]*\bsrc=["\']([^"\']+)',
+        html,
+        flags=re.I,
+    )
+
+    for src in dict.fromkeys(sources):
+        url = urljoin(response.url, src)
+
+        if not url.startswith(
+            "https://www.tpex.org.tw/"
+        ):
+            continue
+
+        if not any(
+            word in url.lower()
+            for word in ("tables.js", "main.js", "global.js")
+        ):
+            continue
 
         try:
-            response = session.get(
-                API,
-                params=params,
-                timeout=45,
-            )
-            inspect_response(response)
-        except requests.RequestException as error:
-            print("連線失敗：", str(error)[:500])
+            result = session.get(url, timeout=30)
+            result.raise_for_status()
 
-    print("\n測試完成，沒有寫入資料庫。")
+            print("\nJS:", url)
+
+            show_context(
+                "表格 API 參數組合",
+                result.text,
+                (
+                    "API_PATTERN",
+                    "serialize",
+                    "URLSearchParams",
+                    "FormData",
+                    "params",
+                    "query",
+                    "request",
+                    "data-format",
+                ),
+                radius=250,
+            )
+
+        except requests.RequestException as error:
+            print("JS 讀取失敗:", str(error)[:200])
+
+    print("\n診斷完成，沒有寫入資料庫。")
 
 
 if __name__ == "__main__":
