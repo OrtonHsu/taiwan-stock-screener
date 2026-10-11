@@ -35,6 +35,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python auto_tpex_backfill.py \
+            python auto_tpex_backfill.py \
             --batch-size 5 \
-            --months 4
+            --months 4 \
+            --write
