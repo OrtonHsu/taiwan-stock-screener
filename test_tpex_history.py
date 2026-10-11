@@ -1,10 +1,17 @@
 
-"""第十次測試：櫃買中心歷史行情 GET 與 POST 驗證。"""
+"""驗證櫃買中心歷史行情 JSON 欄位，不寫入資料庫。"""
 
 import json
 import requests
 
 API = "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock"
+
+PARAMS = {
+    "code": "1240",
+    "date": "2026/09/01",
+    "id": "",
+    "response": "json",
+}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -15,127 +22,63 @@ HEADERS = {
     ),
 }
 
-TESTS = [
-    (
-        "GET：西元完整日期，加 id",
-        "GET",
-        {
-            "code": "1240",
-            "date": "2026/09/01",
-            "id": "",
-            "response": "json",
-        },
-    ),
-    (
-        "GET：民國完整日期，加 id",
-        "GET",
-        {
-            "code": "1240",
-            "date": "115/09/01",
-            "id": "",
-            "response": "json",
-        },
-    ),
-    (
-        "POST：西元完整日期",
-        "POST",
-        {
-            "code": "1240",
-            "date": "2026/09/01",
-            "id": "",
-            "response": "json",
-        },
-    ),
-    (
-        "POST：民國完整日期",
-        "POST",
-        {
-            "code": "1240",
-            "date": "115/09/01",
-            "id": "",
-            "response": "json",
-        },
-    ),
-]
-
-
-def inspect_response(response):
-    print("HTTP 狀態：", response.status_code)
-    print("資料類型：", response.headers.get("Content-Type"))
-    print("回傳大小：", len(response.content))
-
-    try:
-        data = response.json()
-    except ValueError:
-        print("非 JSON，內容前 500 字：")
-        print(response.text[:500])
-        return
-
-    if isinstance(data, dict):
-        print("JSON 欄位：", list(data.keys())[:25])
-
-        for key, value in data.items():
-            if isinstance(value, list):
-                print(f"{key}：{len(value)} 筆")
-                print(
-                    "前兩筆：",
-                    json.dumps(
-                        value[:2],
-                        ensure_ascii=False,
-                    )[:1500],
-                )
-            elif isinstance(value, dict):
-                print(
-                    f"{key}：",
-                    json.dumps(
-                        value,
-                        ensure_ascii=False,
-                    )[:500],
-                )
-            else:
-                print(f"{key}：", str(value)[:300])
-
-    elif isinstance(data, list):
-        print("資料筆數：", len(data))
-        print(
-            "前兩筆：",
-            json.dumps(data[:2], ensure_ascii=False)[:1500],
-        )
-    else:
-        print("回傳內容：", str(data)[:500])
-
 
 def main():
-    session = requests.Session()
-    session.headers.update(HEADERS)
+    response = requests.get(
+        API,
+        params=PARAMS,
+        headers=HEADERS,
+        timeout=45,
+    )
+    response.raise_for_status()
 
-    for number, (label, method, params) in enumerate(TESTS, 1):
-        print("\n" + "=" * 50)
-        print(f"第 {number} 組：{label}")
-        print("請求方式：", method)
-        print("查詢參數：", params)
+    payload = response.json()
 
-        try:
-            if method == "POST":
-                response = session.post(
-                    API,
-                    data=params,
-                    timeout=45,
+    print("===== API 回應 =====")
+    print("HTTP:", response.status_code)
+    print("資料類型:", type(payload).__name__)
+
+    if not isinstance(payload, dict):
+        print("回傳資料:")
+        print(json.dumps(
+            payload, ensure_ascii=False, indent=2
+        )[:5000])
+        return
+
+    print("\n===== 所有頂層欄位 =====")
+
+    for key, value in payload.items():
+        print(key, "=>", type(value).__name__)
+
+        if isinstance(value, list):
+            print("筆數:", len(value))
+
+            for index, item in enumerate(value[:3], 1):
+                print(
+                    f"第 {index} 筆:",
+                    json.dumps(item, ensure_ascii=False),
                 )
-            else:
-                response = session.get(
-                    API,
-                    params=params,
-                    timeout=45,
-                )
 
-            inspect_response(response)
+        elif isinstance(value, dict):
+            print(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    indent=2,
+                )[:1500]
+            )
 
-        except requests.RequestException as error:
-            print("請求失敗：", str(error)[:500])
+        else:
+            print("內容:", str(value)[:500])
 
-    print("\n第十次測試完成。")
-    print("沒有寫入 Supabase。")
+    print("\n===== 資料驗證 =====")
+
+    for key in ("stat", "status", "date", "code", "name"):
+        if key in payload:
+            print(key, "=", payload[key])
+
+    print("\n驗證完成。")
+    print("沒有修改任何資料庫。")
 
 
 if __name__ == "__main__":
