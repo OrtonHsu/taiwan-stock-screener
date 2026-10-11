@@ -1,10 +1,8 @@
 
-"""TPEx monthly historical price backfill.
-
-Default: dry-run only. No database writes.
-"""
+"""TPEx monthly history backfill with optional database writes."""
 
 import argparse
+import os
 import re
 import time
 from datetime import date
@@ -12,6 +10,7 @@ from datetime import date
 import requests
 
 from screener import num
+from storage import Store
 
 API = (
     "https://www.tpex.org.tw/www/zh-tw/"
@@ -43,7 +42,7 @@ def months_back(count):
 
 def parse_month(payload, code, expected_month):
     if not isinstance(payload, dict):
-        raise ValueError("官方回傳不是 JSON 物件")
+        raise ValueError("官方回傳格式異常")
 
     if str(payload.get("stat", "")).lower() != "ok":
         raise ValueError(
@@ -56,23 +55,22 @@ def parse_month(payload, code, expected_month):
         raise ValueError("官方沒有提供行情表格")
 
     table = tables[0]
-
     fields = table.get("fields", [])
     source_rows = table.get("data", [])
 
-    required = {
-        "日 期": "date",
-        "成交張數": "volume",
-        "成交仟元": "amount",
-        "收盤": "close",
-    }
+    required = (
+        "日 期",
+        "成交張數",
+        "成交仟元",
+        "收盤",
+    )
 
     positions = {}
 
     for field in required:
         if field not in fields:
             raise ValueError(
-                f"找不到必要欄位：{field}；實際欄位：{fields}"
+                f"缺少欄位：{field}；實際：{fields}"
             )
         positions[field] = fields.index(field)
 
@@ -118,7 +116,7 @@ def parse_month(payload, code, expected_month):
 
             if trading_day in seen_dates:
                 raise ValueError(
-                    f"重複日期：{raw_date}"
+                    f"官方資料日期重複：{raw_date}"
                 )
 
             seen_dates.add(trading_day)
@@ -173,6 +171,48 @@ def parse_month(payload, code, expected_month):
     return records
 
 
+def create_progress_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS backfill_progress (
+                market TEXT NOT NULL,
+                code TEXT NOT NULL,
+                month TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                completed_at TIMESTAMPTZ NOT NULL
+                    DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (market, code, month)
+            )
+        """)
+    conn.commit()
+
+
+def is_completed(conn, code, month):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT 1
+            FROM backfill_progress
+            WHERE market = 'TPEx'
+              AND code = %s
+              AND month = %s
+        """, (code, month))
+        return cur.fetchone() is not None
+
+
+def mark_completed(conn, code, month, row_count):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO backfill_progress
+                (market, code, month, row_count)
+            VALUES ('TPEx', %s, %s, %s)
+            ON CONFLICT (market, code, month)
+            DO UPDATE SET
+                row_count = EXCLUDED.row_count,
+                completed_at = CURRENT_TIMESTAMP
+        """, (code, month, row_count))
+    conn.commit()
+
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -193,6 +233,12 @@ def main():
         default=2.0,
     )
 
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="正式寫入 Supabase；未指定則只測試",
+    )
+
     args = parser.parse_args()
 
     codes = list(dict.fromkeys(
@@ -202,92 +248,143 @@ def main():
     ))
 
     if not 1 <= len(codes) <= 20:
-        raise ValueError(
-            "每批只允許 1 至 20 檔股票"
-        )
+        raise ValueError("每批只允許 1 至 20 檔")
 
     if not all(
         re.fullmatch(r"\d{4}", code)
         for code in codes
     ):
-        raise ValueError(
-            "股票代號必須是四碼數字"
-        )
+        raise ValueError("股票代號必須為四碼數字")
 
     if not 1 <= args.months <= 12:
-        raise ValueError(
-            "月份必須介於 1 至 12"
+        raise ValueError("月份必須介於 1 至 12")
+
+    if args.write and not os.getenv("DATABASE_URL"):
+        raise RuntimeError(
+            "正式寫入模式缺少 DATABASE_URL"
         )
 
     total = 0
+    written = 0
+    skipped = 0
     failures = []
 
-    with requests.Session() as session:
-        session.headers.update(HEADERS)
+    current_month = date.today().strftime("%Y-%m")
 
-        for code in codes:
-            for month in months_back(args.months):
-                label = (
-                    f"{code} "
-                    f"{month.strftime('%Y-%m')}"
-                )
+    progress_conn = None
+    db = None
 
-                params = {
-                    "code": code,
-                    "date": month.strftime(
-                        "%Y/%m/%d"
-                    ),
-                    "id": "",
-                    "response": "json",
-                }
+    try:
+        if args.write:
+            import psycopg
 
-                try:
-                    response = session.get(
-                        API,
-                        params=params,
-                        timeout=45,
+            progress_conn = psycopg.connect(
+                os.environ["DATABASE_URL"]
+            )
+            create_progress_table(progress_conn)
+            db = Store()
+
+        with requests.Session() as session:
+            session.headers.update(HEADERS)
+
+            for code in codes:
+                for month in months_back(args.months):
+                    month_key = month.strftime("%Y-%m")
+                    label = f"{code} {month_key}"
+
+                    if (
+                        args.write
+                        and month_key != current_month
+                        and is_completed(
+                            progress_conn, code, month_key
+                        )
+                    ):
+                        skipped += 1
+                        print(
+                            f"SKIPPED {label}: 已完成"
+                        )
+                        continue
+
+                    params = {
+                        "code": code,
+                        "date": month.strftime("%Y/%m/%d"),
+                        "id": "",
+                        "response": "json",
+                    }
+
+                    try:
+                        response = session.get(
+                            API,
+                            params=params,
+                            timeout=45,
+                        )
+                        response.raise_for_status()
+
+                        records = parse_month(
+                            response.json(),
+                            code,
+                            month_key,
+                        )
+
+                        total += len(records)
+
+                        if args.write:
+                            count = db.store(records)
+                            written += count
+
+                            if month_key != current_month:
+                                mark_completed(
+                                    progress_conn,
+                                    code,
+                                    month_key,
+                                    len(records),
+                                )
+
+                            print(
+                                f"WRITTEN {label}: "
+                                f"{count} rows"
+                            )
+                        else:
+                            print(
+                                f"OK {label}: "
+                                f"{len(records)} valid rows"
+                            )
+
+                            for row in records[:3]:
+                                print("SAMPLE:", row)
+
+                    except Exception as exc:
+                        failures.append(
+                            f"{label}: {exc}"
+                        )
+                        print(
+                            f"FAILED {label}: {exc}"
+                        )
+
+                    time.sleep(
+                        max(1.5, args.delay)
                     )
 
-                    response.raise_for_status()
+    finally:
+        if db is not None:
+            db.close()
 
-                    records = parse_month(
-                        response.json(),
-                        code,
-                        month.strftime("%Y-%m"),
-                    )
+        if progress_conn is not None:
+            progress_conn.close()
 
-                    total += len(records)
-
-                    print(
-                        f"OK {label}: "
-                        f"{len(records)} valid rows"
-                    )
-
-                    for row in records[:3]:
-                        print("SAMPLE:", row)
-
-                except Exception as exc:
-                    failures.append(
-                        f"{label}: {exc}"
-                    )
-
-                    print(
-                        f"FAILED {label}: {exc}"
-                    )
-
-                time.sleep(
-                    max(1.5, args.delay)
-                )
-
-    print("\n===== 測試總結 =====")
+    print("\n===== 執行總結 =====")
+    print(
+        "模式：",
+        "WRITE" if args.write else "DRY RUN",
+    )
     print("有效資料筆數：", total)
+    print("寫入筆數：", written)
+    print("跳過月份數：", skipped)
     print("失敗月份數：", len(failures))
-    print("模式：DRY RUN")
-    print("沒有寫入 Supabase。")
 
     if failures:
         raise RuntimeError(
-            "部分月份驗證失敗，請查看紀錄"
+            "部分月份處理失敗，請查看執行紀錄"
         )
 
 
