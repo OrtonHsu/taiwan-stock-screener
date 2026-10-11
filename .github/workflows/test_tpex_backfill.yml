@@ -1,0 +1,35 @@
+
+name: Test TPEx History Backfill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-tpex-backfill:
+    name: Test TPEx Monthly Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas psycopg[binary]
+
+      - name: Test TPEx historical data
+        run: |
+          python tpex_backfill.py \
+            --codes 1240 \
+            --months 2 \
+            --delay 2
