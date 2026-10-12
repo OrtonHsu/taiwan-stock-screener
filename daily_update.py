@@ -82,19 +82,24 @@ def main():
             response = session.get(url, headers=HEADERS, timeout=45)
             response.raise_for_status()
             batches[market] = parse_market(market, response.json())
-    days = {day for day, _ in batches.values()}
-    if len(days) != 1:
-        raise RuntimeError(f'上市與上櫃交易日期不同，拒絕寫入: {days}')
-    official_day = date.fromisoformat(days.pop())
-    if official_day != now.date():
-        raise RuntimeError(f'官方資料日期為 {official_day}，今天為 {now.date()}；不寫入舊快照')
-    rows = [row for _, batch in batches.values() for row in batch]
     db = Store()
     try:
-        count = db.store(rows)
+        for market, (day, records) in batches.items():
+            if date.fromisoformat(day) != now.date():
+                print(
+                    f'SKIPPED {market}: 官方日期 {day}，'
+                    f'今天 {now.date()}，等待官方更新'
+                )
+                continue
+
+            count = db.store(records)
+            print(
+                f'WRITTEN {market}: 日期 {day}，'
+                f'有效股票 {len(records)} 檔，'
+                f'寫入 {count} 筆'
+            )
     finally:
         db.close()
-    print(f'官方交易日 {official_day}; TWSE={len(batches["TWSE"][1])}; TPEX={len(batches["TPEX"][1])}; written={count}')
 
 
 if __name__ == '__main__':
