@@ -4,7 +4,7 @@ name: Automatic TPEx History Backfill
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 */2 * * *"
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
@@ -20,11 +20,9 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
