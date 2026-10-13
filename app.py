@@ -1,5 +1,5 @@
 
-"""Taiwan stock screener V1.2 - personal read-only dashboard."""
+"""Taiwan stock screener V1.3 - personal risk dashboard."""
 
 import os
 from datetime import datetime
@@ -13,26 +13,27 @@ from storage import Store
 
 
 st.set_page_config(
-    page_title="台股盤後選股 V1.2",
+    page_title="台股盤後選股 V1.3",
     page_icon="📈",
     layout="wide",
 )
 
-st.title("📈 台股盤後選股 V1.2")
+st.title("📈 台股盤後選股 V1.3")
+
 st.caption(
-    "個人投資研究工具｜每日盤後觀察｜"
-    "不提供自動下單｜技術分數不代表上漲機率"
+    "個人投資研究工具｜盤後選股｜進場風險觀察｜"
+    "無自動下單｜分數不代表上漲機率"
 )
 
 st.warning(
-    "⚠️ 上市及上櫃歷史資料仍持續回補。"
-    "目前候選股僅來自歷史資料足夠且符合條件的股票，"
-    "尚不能視為完整全市場前 10 名。"
+    "⚠️ 上市與上櫃歷史資料仍持續回補。"
+    "目前候選股只來自資料足夠的股票，"
+    "尚不能視為完整全市場最佳前10名。"
 )
 
 
 # ---------------------------------
-# Sidebar settings
+# Sidebar
 # ---------------------------------
 
 with st.sidebar:
@@ -64,16 +65,15 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("📌 系統說明")
     st.info(
-        "每日行情由 GitHub Actions 自動更新。\n\n"
-        "歷史資料由背景排程持續回補。\n\n"
-        "本網站只讀取資料庫，不提供上傳或手動寫入功能。"
+        "每日行情由 GitHub Actions 更新。\n\n"
+        "歷史資料持續自動回補。\n\n"
+        "網站只讀取行情，不提供公開寫入功能。"
     )
 
 
 # ---------------------------------
-# Database connection
+# Database
 # ---------------------------------
 
 try:
@@ -81,7 +81,9 @@ try:
 
     if not url:
         try:
-            url = st.secrets.get("DATABASE_URL", "")
+            url = st.secrets.get(
+                "DATABASE_URL", ""
+            )
         except Exception:
             pass
 
@@ -93,14 +95,16 @@ try:
         db.close()
 
 except Exception as exc:
-    st.error(f"資料庫讀取失敗：{exc}")
+    st.error(
+        f"資料庫讀取失敗：{exc}"
+    )
     st.stop()
 
 
 if prices.empty:
     st.info(
-        "資料庫目前沒有股票行情。"
-        "請先確認 GitHub Actions 的每日更新執行紀錄。"
+        "資料庫目前沒有行情資料，"
+        "請檢查 GitHub Actions 更新紀錄。"
     )
     st.stop()
 
@@ -150,46 +154,60 @@ trading_days = prices["date"].nunique()
 
 st.subheader("📊 最新行情概況")
 
-col1, col2, col3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
 
-col1.metric(
+c1.metric(
     "最新資料日期",
     latest,
 )
 
-col2.metric(
-    "累積交易日期數",
+c2.metric(
+    "累積交易日期",
     f"{trading_days:,}",
 )
 
-col3.metric(
-    "最新資料股票數",
+c3.metric(
+    "最新行情股票",
     f"{latest_count:,}",
 )
 
-col4, col5 = st.columns(2)
+c4, c5 = st.columns(2)
 
-col4.metric(
+c4.metric(
     "上市股票",
     f"{market_counts.get('TWSE', 0):,}",
 )
 
-col5.metric(
+c5.metric(
     "上櫃股票",
     f"{market_counts.get('TPEX', 0):,}",
 )
 
+other_count = latest_count - (
+    market_counts.get("TWSE", 0)
+    + market_counts.get("TPEX", 0)
+)
+
+if other_count:
+    st.warning(
+        f"最新行情有 {other_count} 筆"
+        "不屬於 TWSE/TPEX 的市場標記，"
+        "建議後續檢查資料來源。"
+    )
+
 if latest != today:
     st.info(
-        f"目前最新行情日期是 {latest}。"
-        "休市日或盤後更新尚未完成時，"
-        "最新日期可能不是今天。"
+        f"最新資料日期為 {latest}。"
+        "休市日、收盤前或資料尚未更新時，"
+        "日期可能不是今天。"
     )
 
 
 # ---------------------------------
 # History coverage
 # ---------------------------------
+
+st.divider()
 
 st.subheader("🗂️ 歷史資料完整度")
 
@@ -210,42 +228,44 @@ coverage = latest_codes.merge(
 )
 
 qualified_history = int(
-    (coverage["history_days"] >= min_history).sum()
+    (
+        coverage["history_days"] >= min_history
+    ).sum()
 )
 
 total_latest = len(coverage)
 
 coverage_pct = (
     qualified_history / total_latest * 100
-    if total_latest > 0
-    else 0.0
+    if total_latest
+    else 0
 )
 
 st.progress(
-    min(1.0, coverage_pct / 100.0)
+    min(1.0, coverage_pct / 100)
 )
 
 st.write(
-    f"最新交易日有 **{qualified_history:,} / "
+    f"已有 **{qualified_history:,} / "
     f"{total_latest:,}** 檔股票，"
     f"累積至少 **{min_history}** 個歷史交易日。"
 )
 
 st.caption(
     f"歷史筆數達標比例：{coverage_pct:.1f}%。"
-    "這是資料筆數覆蓋率，不代表交易日連續，"
-    "也不代表資料已完成除權息調整。"
+    "此比例不代表交易日連續，"
+    "也不代表完成除權息調整。"
 )
 
 if qualified_history < total_latest:
     st.warning(
         "部分股票歷史資料尚未達標，"
-        "因此暫時無法參與選股排名。"
+        "暫時無法參加選股排名。"
     )
 
 
 # ---------------------------------
-# Screening
+# Screening calculation
 # ---------------------------------
 
 st.divider()
@@ -253,9 +273,9 @@ st.divider()
 st.subheader("🏆 最新交易日候選股票")
 
 st.caption(
-    "條件：多頭均線、突破前20日高點、"
-    "成交量放大、流動性達標。"
-    "符合條件者依技術分數排序，最多顯示10檔。"
+    "依多頭趨勢、突破前20日高點、"
+    "成交量放大與流動性條件篩選。"
+    "符合條件者按技術分數排序，最多10檔。"
 )
 
 try:
@@ -267,7 +287,9 @@ try:
     )
 
 except Exception as exc:
-    st.error(f"選股計算失敗：{exc}")
+    st.error(
+        f"選股計算失敗：{exc}"
+    )
     st.stop()
 
 
@@ -277,16 +299,16 @@ if not results.empty:
     ].copy()
 
     results = results.sort_values(
-        "score",
-        ascending=False,
+        ["score", "risk_pct"],
+        ascending=[False, True],
     ).head(10)
 
 
 if results.empty:
     st.info(
         "目前沒有符合條件的股票。"
-        "可能是歷史資料不足，"
-        "或市場上沒有符合突破與量能條件的標的。"
+        "可能是資料不足，或沒有股票符合"
+        "趨勢、突破及量能條件。"
         "系統不會為了湊滿10檔而放寬條件。"
     )
 
@@ -295,18 +317,16 @@ else:
         f"本次找到 {len(results)} 檔候選股票。"
     )
 
-    # Compact table
     display_columns = [
         "market",
         "code",
         "name",
         "close",
         "score",
+        "risk_level",
+        "extension_pct",
+        "risk_pct",
         "volume_ratio",
-        "ma20",
-        "ma60",
-        "breakout_ref",
-        "history_days",
     ]
 
     table = results[
@@ -318,11 +338,10 @@ else:
             "name": "名稱",
             "close": "收盤價",
             "score": "技術分數",
+            "risk_level": "追高風險",
+            "extension_pct": "20日乖離%",
+            "risk_pct": "支撐距離%",
             "volume_ratio": "量比",
-            "ma20": "20日均線",
-            "ma60": "60日均線",
-            "breakout_ref": "突破參考價",
-            "history_days": "歷史交易日",
         }
     )
 
@@ -333,20 +352,60 @@ else:
     )
 
     st.download_button(
-        label="📥 下載前10名候選股 CSV",
+        "📥 下載候選股與風險分析 CSV",
         data=results.to_csv(
             index=False
         ).encode("utf-8-sig"),
-        file_name=f"screen_{latest}.csv",
+        file_name=f"screen_v13_{latest}.csv",
         mime="text/csv",
     )
 
-    # Mobile-friendly details
-    st.subheader("📱 個股詳細資訊")
+    # ---------------------------------
+    # Risk overview
+    # ---------------------------------
+
+    st.subheader("🛡️ 追高風險概況")
+
+    risk_counts = (
+        results["risk_level"]
+        .value_counts()
+        .to_dict()
+    )
+
+    r1, r2, r3 = st.columns(3)
+
+    r1.metric(
+        "低風險標籤",
+        risk_counts.get("低", 0),
+    )
+
+    r2.metric(
+        "中風險標籤",
+        risk_counts.get("中", 0),
+    )
+
+    r3.metric(
+        "高風險標籤",
+        risk_counts.get("高", 0),
+    )
 
     st.caption(
-        "點擊股票即可展開詳細資訊。"
-        "下列價格為技術參考，不是買進指令。"
+        "低、中、高為短線追價條件分類，"
+        "不代表股票的真實虧損機率。"
+        "低風險標籤也不代表適合立即買進。"
+    )
+
+    # ---------------------------------
+    # Individual stock detail
+    # ---------------------------------
+
+    st.divider()
+
+    st.subheader("📱 個股進場風險分析")
+
+    st.caption(
+        "點擊股票可展開技術數據與風險資訊。"
+        "所有價位均屬研究參考。"
     )
 
     for _, stock in results.iterrows():
@@ -361,10 +420,16 @@ else:
             f"{market_name} "
             f"{stock['code']} "
             f"{stock['name']}｜"
-            f"{stock['score']:.1f}分"
+            f"{stock['score']:.1f}分｜"
+            f"追高風險：{stock['risk_level']}"
         )
 
         with st.expander(heading):
+
+            st.markdown(
+                f"### {stock['code']} "
+                f"{stock['name']}"
+            )
 
             a, b = st.columns(2)
 
@@ -374,81 +439,177 @@ else:
             )
 
             b.metric(
-                "成交量比",
-                f"{stock['volume_ratio']:.2f} 倍",
+                "技術分數",
+                f"{stock['score']:.1f}",
             )
 
             c, d = st.columns(2)
 
             c.metric(
+                "成交量比",
+                f"{stock['volume_ratio']:.2f} 倍",
+            )
+
+            d.metric(
+                "20日均線乖離",
+                f"{stock['extension_pct']:.2f}%",
+            )
+
+            st.divider()
+
+            st.markdown("#### 📉 技術參考價")
+
+            e, f = st.columns(2)
+
+            e.metric(
                 "20日均線",
                 f"{stock['ma20']:.2f}",
             )
 
-            d.metric(
+            f.metric(
                 "60日均線",
                 f"{stock['ma60']:.2f}",
             )
 
+            g, h = st.columns(2)
+
+            g.metric(
+                "突破參考價",
+                f"{stock['breakout_ref']:.2f}",
+            )
+
+            h.metric(
+                "支撐參考價",
+                f"{stock['stop_reference']:.2f}",
+            )
+
+            st.metric(
+                "收盤價至支撐參考價距離",
+                f"{stock['risk_pct']:.2f}%",
+            )
+
+            st.divider()
+
+            st.markdown("#### 🚦 隔日追價風險")
+
+            risk_level = stock["risk_level"]
+            risk_note = stock["risk_note"]
+
+            if risk_level == "高":
+                st.error(
+                    f"高追價風險：{risk_note}"
+                )
+
+            elif risk_level == "中":
+                st.warning(
+                    f"中追價風險：{risk_note}"
+                )
+
+            else:
+                st.info(
+                    f"低追價風險標籤：{risk_note}"
+                )
+
             st.write(
-                f"**前20日突破參考價：** "
-                f"{stock['breakout_ref']:.2f}"
+                "**隔日追價警戒參考：** "
+                f"{stock['watch_ceiling']:.2f} 元"
+            )
+
+            st.caption(
+                "此參考值以當日收盤價上方2%計算，"
+                "只是提醒避免追價的示意門檻，"
+                "並非建議買入價或合理價估值。"
             )
 
             st.write(
-                f"**20日平均成交金額：** "
+                "**近20日平均成交金額：** "
                 f"{stock['avg_turnover'] / 10000:,.0f} 萬元"
             )
 
             st.write(
-                f"**歷史交易日數：** "
+                "**歷史資料筆數：** "
                 f"{stock['history_days']} 日"
             )
 
             st.caption(
-                "技術分數用於比較符合條件的程度，"
-                "不代表勝率。"
-                "目前尚未計算隔日進場價、"
-                "停損價與預期報酬。"
+                "支撐參考價是依收盤價、20日均線"
+                "與突破位置建立的簡化規則，"
+                "不等於可實際成交的停損價。"
+                "遇跳空下跌，損失可能超過顯示距離。"
             )
 
 
 # ---------------------------------
-# Notes
+# Risk explanation
 # ---------------------------------
 
 st.divider()
 
+with st.expander("📖 風險分級如何計算？"):
+
+    st.write(
+        "**20日乖離率：** "
+        "最新收盤價相對20日均線高出多少百分比。"
+    )
+
+    st.write(
+        "**支撐距離：** "
+        "最新收盤價到程式估算技術支撐價的距離。"
+    )
+
+    st.write(
+        "**高追價風險：** "
+        "20日乖離率超過12%，"
+        "或支撐距離超過8%。"
+    )
+
+    st.write(
+        "**中追價風險：** "
+        "未達高風險條件，但20日乖離率超過7%，"
+        "或支撐距離超過5%。"
+    )
+
+    st.write(
+        "**低追價風險標籤：** "
+        "未觸及上述中、高風險門檻。"
+        "仍可能面臨重大下跌、基本面或流動性風險。"
+    )
+
+    st.write(
+        "這些門檻尚未完成歷史回測，"
+        "不代表未來報酬或勝率。"
+    )
+
+
 with st.expander("📚 資料來源與使用限制"):
+
     st.write(
-        "每日上市行情：TWSE 官方資料，"
-        "含已驗證的 MI_INDEX 備援來源。"
+        "上市每日行情來自 TWSE 官方來源，"
+        "並具備 MI_INDEX 備援機制。"
     )
 
     st.write(
-        "每日上櫃行情：TPEx 官方資料。"
+        "上櫃每日行情來自 TPEx 官方來源。"
     )
 
     st.write(
-        "上市及上櫃歷史行情："
-        "由 GitHub Actions 排程持續回補。"
+        "歷史資料透過 GitHub Actions 持續回補。"
     )
 
     st.write(
-        "目前選股依據為歷史收盤價、"
-        "成交股數及成交金額，"
-        "尚未納入法人籌碼、財報基本面、"
-        "除權息還原或交易成本回測。"
+        "目前尚未完整處理除權息還原、"
+        "法人籌碼、基本面、重大公告、"
+        "處置股票、交易成本及績效回測。"
     )
 
     st.write(
-        "候選股票不等於買進建議。"
-        "進場前仍需評估當日價格、"
-        "市場風險、部位大小及停損規劃。"
+        "技術分數和風險分類只適合作為研究起點，"
+        "不能取代個別投資判斷。"
     )
+
 
 st.caption(
-    "台股盤後選股 V1.2｜"
-    "個人研究用途｜"
+    "台股盤後選股 V1.3｜"
+    "個人研究使用｜"
     "無自動交易功能"
 )
