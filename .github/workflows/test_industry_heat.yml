@@ -1,0 +1,130 @@
+
+name: Test Industry Heat V1.4
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-industry-heat:
+    name: Test Industry Heat Calculation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas psycopg[binary]
+
+      - name: Verify official industry classification
+        run: |
+          python - <<'PY'
+          from industry_heat import get_industries
+
+          profiles = get_industries()
+
+          print("===== 官方產業分類測試 =====")
+          print("成功辨識股票數：", len(profiles))
+
+          print(
+              "上市股票數：",
+              len(profiles[profiles.market == "TWSE"])
+          )
+
+          print(
+              "上櫃股票數：",
+              len(profiles[profiles.market == "TPEX"])
+          )
+
+          print(
+              "產業種類數：",
+              profiles.industry.nunique()
+          )
+
+          print("\n產業分類範例：")
+          print(
+              profiles.head(15).to_string(index=False)
+          )
+
+          assert len(profiles) >= 1000, (
+              "官方產業分類數量異常"
+          )
+
+          assert set(profiles.market) == {
+              "TWSE", "TPEX"
+          }, "上市或上櫃產業資料缺失"
+
+          print("\nCLASSIFICATION TEST PASSED")
+          PY
+
+      - name: Test industry heat using Supabase
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL" || \
+            (echo "Missing DATABASE_URL" && exit 1)
+
+          python - <<'PY'
+          from storage import Store
+          from industry_heat import build_industry_heat
+
+          db = Store()
+
+          try:
+              prices = db.load()
+          finally:
+              db.close()
+
+          print("===== Supabase 資料檢查 =====")
+          print("歷史行情筆數：", len(prices))
+
+          if prices.empty:
+              raise RuntimeError("資料庫沒有行情")
+
+          profiles, heat = build_industry_heat(prices)
+
+          print("\n===== 產業熱度測試 =====")
+
+          print("成功讀取產業股票數：", len(profiles))
+          print("產業統計列數：", len(heat))
+
+          if heat.empty:
+              print("WARNING: 近期行情資料不足")
+              print("目前無法產生產業熱度")
+          else:
+              valid = heat[
+                  heat.status == "可計算"
+              ]
+
+              insufficient = heat[
+                  heat.status == "資料不足"
+              ]
+
+              print("可計算產業：", len(valid))
+              print("資料不足產業：", len(insufficient))
+
+              print("\n產業熱度結果：")
+              print(
+                  heat.head(20).to_string(index=False)
+              )
+
+              if not valid.empty:
+                  assert valid.industry_heat.between(
+                      0, 100
+                  ).all(), "熱度超出 0～100 範圍"
+
+              print("\nHEAT TEST COMPLETED")
+
+          print("\n測試完畢，未寫入任何行情")
+          PY
