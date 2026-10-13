@@ -3,7 +3,8 @@ name: Automatic TWSE History Backfill
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '7 * * * *'
+
   workflow_dispatch:
     inputs:
       batch_size:
@@ -14,6 +15,7 @@ on:
         options:
           - "5"
           - "10"
+
       months:
         description: "Months of history"
         required: true
@@ -53,6 +55,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BATCH_SIZE: ${{ inputs.batch_size || '5' }}
           MONTHS: ${{ inputs.months || '4' }}
+
         run: |
           test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
           python auto_backfill.py --batch-size "$BATCH_SIZE" --months "$MONTHS"
