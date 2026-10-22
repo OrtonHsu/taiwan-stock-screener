@@ -25,9 +25,15 @@ HEADERS = {
 # Verified first TWSE trading dates.
 # Months before these dates have no TWSE listing history.
 # Add further entries only after official verification.
+
 FIRST_TWSE_TRADING_DATE = {
     "2237": date(2026, 8, 10),
+    "6467": date(2026, 10, 20),
+    "7812": date(2026, 9, 22),
+    "7855": date(2026, 8, 11),
+    "8908": date(2026, 10, 16),
 }
+
 
 MAX_RETRIES = 3
 
