@@ -3,7 +3,7 @@ name: Automatic TWSE History Backfill
 
 on:
   schedule:
-    - cron: '7 * * * *'
+    - cron: '7,37 * * * *'
 
   workflow_dispatch:
     inputs:
