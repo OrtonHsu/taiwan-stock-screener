@@ -1,0 +1,80 @@
+
+name: V1.6.1 Backtest Quality Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      signal_days:
+        description: "Historical signal dates"
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "10"
+          - "20"
+
+      top:
+        description: "Candidates per mode"
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strategy-backtest-v161
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    name: Run V1.6.1 Quality Backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install "psycopg[binary]"
+
+      - name: Check required files
+        run: |
+          test -f backtest_v161.py
+          test -f backtest_v16.py
+          test -f v15_strategy.py
+          test -f storage.py
+
+      - name: Run V1.6.1 backtest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SIGNAL_DAYS: ${{ inputs.signal_days || '5' }}
+          TOP: ${{ inputs.top || '5' }}
+
+        run: |
+          test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
+          python backtest_v161.py \
+            --signal-days "$SIGNAL_DAYS" \
+            --top "$TOP" \
+            --output backtest_v161_results
+
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v161-backtest-quality-results
+          path: backtest_v161_results/*.csv
+          if-no-files-found: warn
+          retention-days: 30
