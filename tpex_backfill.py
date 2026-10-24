@@ -1,5 +1,11 @@
 
-"""Official TPEx monthly history backfill with verified progress."""
+"""Safe TPEx monthly history backfill.
+
+Price market: TPEX
+Existing progress market: TPEx
+
+Existing daily prices are never overwritten.
+"""
 
 import argparse
 import os
@@ -8,10 +14,10 @@ import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import psycopg
 import requests
 
 from screener import num
-from storage import Store
 
 
 API = (
@@ -27,6 +33,14 @@ HEADERS = {
         "trading/info/stock-pricing.html"
     ),
 }
+
+PRICE_MARKET = "TPEX"
+
+# Keep the old progress label to preserve
+# previously completed historical months.
+PROGRESS_MARKET = "TPEx"
+
+MAX_RETRIES = 3
 
 
 def taiwan_today():
@@ -50,8 +64,6 @@ def months_back(count):
 
 
 def parse_roc_date(raw, expected_month):
-    """Parse ROC dates with optional official footnote stars."""
-
     value = str(raw or "").strip()
 
     match = re.fullmatch(
@@ -65,7 +77,8 @@ def parse_roc_date(raw, expected_month):
         )
 
     year, month, day = map(
-        int, match.groups()
+        int,
+        match.groups(),
     )
 
     trading_day = date(
@@ -86,8 +99,6 @@ def parse_roc_date(raw, expected_month):
 
 
 def parse_month(payload, code, expected_month):
-    """Return validated daily rows; [] means verified no valid quotes."""
-
     if not isinstance(payload, dict):
         raise ValueError(
             "官方回傳格式異常"
@@ -110,7 +121,8 @@ def parse_month(payload, code, expected_month):
     if not tables:
         print(
             f"NO_DATA {code} {expected_month}: "
-            "官方回傳空表格"
+            "官方回傳空表格",
+            flush=True,
         )
         return []
 
@@ -154,7 +166,8 @@ def parse_month(payload, code, expected_month):
     if not source_rows:
         print(
             f"NO_DATA {code} {expected_month}: "
-            "官方沒有提供每日行情"
+            "官方沒有提供每日行情",
+            flush=True,
         )
         return []
 
@@ -195,7 +208,8 @@ def parse_month(payload, code, expected_month):
             if close is None or close <= 0:
                 print(
                     f"SKIP {code} {raw_date}: "
-                    "無有效收盤價"
+                    "無有效收盤價",
+                    flush=True,
                 )
                 continue
 
@@ -220,7 +234,7 @@ def parse_month(payload, code, expected_month):
             records.append(
                 (
                     trading_day.isoformat(),
-                    "TPEx",
+                    PRICE_MARKET,
                     code,
                     name,
                     close,
@@ -241,7 +255,8 @@ def parse_month(payload, code, expected_month):
     if not records:
         print(
             f"NO_DATA {code} {expected_month}: "
-            "該月沒有有效收盤價紀錄"
+            "該月沒有有效收盤價紀錄",
+            flush=True,
         )
 
     return records
@@ -251,7 +266,8 @@ def create_progress_table(conn):
     with conn.cursor() as cur:
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS backfill_progress (
+            CREATE TABLE IF NOT EXISTS
+            backfill_progress (
                 market TEXT NOT NULL,
                 code TEXT NOT NULL,
                 month TEXT NOT NULL,
@@ -272,44 +288,78 @@ def is_completed(conn, code, month):
             """
             SELECT 1
             FROM backfill_progress
-            WHERE market = 'TPEx'
+            WHERE market = %s
               AND code = %s
               AND month = %s
             """,
-            (code, month),
+            (PROGRESS_MARKET, code, month),
         )
 
         return cur.fetchone() is not None
 
 
-def mark_completed(
-    conn,
-    code,
-    month,
-    row_count,
-):
+def mark_completed(conn, code, month, row_count):
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO backfill_progress
                 (market, code, month, row_count)
-            VALUES ('TPEx', %s, %s, %s)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (market, code, month)
             DO UPDATE SET
                 row_count = EXCLUDED.row_count,
                 completed_at = CURRENT_TIMESTAMP
             """,
-            (code, month, row_count),
+            (
+                PROGRESS_MARKET,
+                code,
+                month,
+                row_count,
+            ),
         )
 
     conn.commit()
 
 
-def get_month(
-    session,
-    code,
-    month,
-):
+def store_without_overwriting(conn, records):
+    """Insert only missing prices.
+
+    Keep existing TPEX daily data unchanged.
+    """
+
+    if not records:
+        return 0
+
+    sql = """
+        INSERT INTO public.prices (
+            date,
+            market,
+            code,
+            name,
+            close,
+            volume,
+            amount
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (date, market, code)
+        DO NOTHING
+    """
+
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(sql, records)
+            inserted = cur.rowcount
+
+        conn.commit()
+
+        return inserted
+
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_month(session, code, month):
     params = {
         "code": code,
         "date": month.strftime("%Y/%m/%d"),
@@ -319,7 +369,7 @@ def get_month(
 
     last_error = None
 
-    for attempt in range(1, 4):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = session.get(
                 API,
@@ -340,14 +390,16 @@ def get_month(
             print(
                 f"RETRY {code} "
                 f"{month.strftime('%Y-%m')} "
-                f"{attempt}/3: {exc}"
+                f"{attempt}/{MAX_RETRIES}: {exc}",
+                flush=True,
             )
 
-            if attempt < 3:
+            if attempt < MAX_RETRIES:
                 time.sleep(attempt * 3)
 
     raise RuntimeError(
-        f"官方資料取得失敗，重試3次：{last_error}"
+        "官方資料取得失敗，"
+        f"重試 {MAX_RETRIES} 次：{last_error}"
     )
 
 
@@ -405,9 +457,9 @@ def main():
             "月份必須介於 1 至 12"
         )
 
-    if args.write and not os.getenv(
-        "DATABASE_URL"
-    ):
+    database_url = os.getenv("DATABASE_URL")
+
+    if args.write and not database_url:
         raise RuntimeError(
             "正式寫入模式缺少 DATABASE_URL"
         )
@@ -418,43 +470,35 @@ def main():
     no_data = 0
     failures = []
 
-    current_month = taiwan_today().strftime(
-        "%Y-%m"
+    current_month = (
+        taiwan_today().strftime("%Y-%m")
     )
 
     progress_conn = None
-    db = None
 
     try:
         if args.write:
-            import psycopg
-
             progress_conn = psycopg.connect(
-                os.environ["DATABASE_URL"]
+                database_url,
+                connect_timeout=15,
             )
 
             create_progress_table(
                 progress_conn
             )
 
-            db = Store()
-
         with requests.Session() as session:
-            session.headers.update(
-                HEADERS
-            )
+            session.headers.update(HEADERS)
 
             for code in codes:
                 for month in months_back(
                     args.months
                 ):
-                    month_key = month.strftime(
-                        "%Y-%m"
+                    month_key = (
+                        month.strftime("%Y-%m")
                     )
 
-                    label = (
-                        f"{code} {month_key}"
-                    )
+                    label = f"{code} {month_key}"
 
                     if (
                         args.write
@@ -469,7 +513,8 @@ def main():
 
                         print(
                             f"SKIPPED {label}: "
-                            "已完成或已查核無資料"
+                            "已完成或已查核無資料",
+                            flush=True,
                         )
 
                         continue
@@ -505,12 +550,14 @@ def main():
 
                             print(
                                 f"VERIFIED_NO_DATA "
-                                f"{label}: 0 rows"
+                                f"{label}: 0 rows",
+                                flush=True,
                             )
 
                         elif args.write:
-                            count = db.store(
-                                records
+                            count = store_without_overwriting(
+                                progress_conn,
+                                records,
                             )
 
                             written += count
@@ -525,87 +572,85 @@ def main():
 
                             print(
                                 f"WRITTEN {label}: "
-                                f"{count} rows"
+                                f"{count} new rows; "
+                                f"{len(records)} valid rows",
+                                flush=True,
                             )
 
                         else:
                             print(
                                 f"OK {label}: "
-                                f"{len(records)} valid rows"
+                                f"{len(records)} valid rows",
+                                flush=True,
                             )
 
                             for row in records[:3]:
                                 print(
-                                    "SAMPLE:", row
+                                    "SAMPLE:",
+                                    row,
                                 )
 
                     except Exception as exc:
+                        if (
+                            progress_conn is not None
+                            and not progress_conn.closed
+                        ):
+                            progress_conn.rollback()
+
                         failures.append(
                             f"{label}: {exc}"
                         )
 
                         print(
-                            f"FAILED {label}: {exc}"
+                            f"FAILED {label}: {exc}",
+                            flush=True,
                         )
 
                     time.sleep(
-                        max(
-                            1.5,
-                            args.delay,
-                        )
+                        max(1.5, args.delay)
                     )
 
     finally:
-        if db is not None:
-            db.close()
-
         if progress_conn is not None:
             progress_conn.close()
 
-    print("\n===== 執行總結 =====")
+    print(
+        "\n===== TPEx 回補總結 =====",
+        flush=True,
+    )
 
     print(
         "模式：",
-        "WRITE"
-        if args.write
-        else "DRY RUN",
+        "WRITE" if args.write else "DRY RUN",
+    )
+
+    print("有效資料筆數：", total)
+    print("新增寫入筆數：", written)
+    print("跳過已查核月份數：", skipped)
+    print("官方確認無行情月份數：", no_data)
+    print("失敗月份數：", len(failures))
+
+    print(
+        "行情市場標記：",
+        PRICE_MARKET,
     )
 
     print(
-        "有效資料筆數：",
-        total,
+        "進度市場標記：",
+        PROGRESS_MARKET,
     )
 
-    print(
-        "寫入筆數：",
-        written,
-    )
-
-    print(
-        "跳過已查核月份數：",
-        skipped,
-    )
-
-    print(
-        "官方確認無行情月份數：",
-        no_data,
-    )
-
-    print(
-        "失敗月份數：",
-        len(failures),
-    )
+    for failure in failures:
+        print(
+            "FAILED_DETAIL",
+            failure,
+            flush=True,
+        )
 
     if failures:
-        for failure in failures:
-            print(
-                "FAILED_DETAIL",
-                failure,
-            )
-
         raise RuntimeError(
-            "仍有月份處理失敗，"
-            "已保留成功資料及進度，"
+            "仍有月份處理失敗；"
+            "成功資料及進度已保留，"
             "請查看 FAILED_DETAIL"
         )
 
