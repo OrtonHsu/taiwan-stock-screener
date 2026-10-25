@@ -1,0 +1,44 @@
+
+name: TPEx Historical Expansion 2026 Mar-Jun
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '10 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-tpex-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  tpex-historical-expansion:
+    name: Backfill TPEx March to June 2026
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas psycopg[binary]
+
+      - name: Backfill TPEx historical months
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
+          python backfill_tpex_202603_202606.py \
+            --batch-size 5 \
+            --delay 2 \
+            --write
