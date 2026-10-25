@@ -1,0 +1,66 @@
+
+name: V1.5.3 MA Backtest Quality
+
+on:
+  workflow_dispatch:
+    inputs:
+      signal_days:
+        description: "回測訊號日數"
+        required: true
+        default: "20"
+        type: choice
+        options:
+          - "5"
+          - "10"
+          - "20"
+          - "30"
+      top:
+        description: "每個模式每日最多股票數"
+        required: true
+        default: "10"
+        type: choice
+        options:
+          - "5"
+          - "10"
+          - "20"
+
+jobs:
+  backtest_quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run MA backtest quality analysis
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python backtest_ma_v153_quality.py \
+            --signal-days "${{ inputs.signal_days }}" \
+            --top "${{ inputs.top }}" \
+            --min-twse 800 \
+            --min-tpex 750 \
+            --anomaly-pct 20 \
+            --output ma_v153_quality_results
+
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ma-v153-quality-results
+          path: ma_v153_quality_results/*.csv
+          if-no-files-found: warn
+          retention-days: 30
