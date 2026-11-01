@@ -190,9 +190,11 @@ def mark_completed(conn, code, month, row_count):
     conn.commit()
 
 
+
 def current_month_has_twse_data(conn, today):
     """Check whether the local database has any TWSE data this month."""
     month_start = today.replace(day=1)
+
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -204,9 +206,10 @@ def current_month_has_twse_data(conn, today):
                   AND date <= %s
             )
             """,
-            (month_start, today),
+            (month_start.isoformat(), today.isoformat()),
         )
         return bool(cur.fetchone()[0])
+
 
 
 def is_temporary_current_month_no_data(exc):
