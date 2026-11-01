@@ -5,6 +5,7 @@ Price market: TPEX
 Existing progress market: TPEx
 
 Existing daily prices are never overwritten.
+Open months are never marked completed.
 """
 
 import argparse
@@ -36,17 +37,14 @@ HEADERS = {
 
 PRICE_MARKET = "TPEX"
 
-# Keep the old progress label to preserve
-# previously completed historical months.
+# Keep old progress label for completed historical months.
 PROGRESS_MARKET = "TPEx"
 
 MAX_RETRIES = 3
 
 
 def taiwan_today():
-    return datetime.now(
-        ZoneInfo("Asia/Taipei")
-    ).date()
+    return datetime.now(ZoneInfo("Asia/Taipei")).date()
 
 
 def months_back(count):
@@ -55,9 +53,7 @@ def months_back(count):
 
     for _ in range(count):
         yield date(year, month, 1)
-
         month -= 1
-
         if month == 0:
             year -= 1
             month = 12
@@ -65,171 +61,98 @@ def months_back(count):
 
 def parse_roc_date(raw, expected_month):
     value = str(raw or "").strip()
-
     match = re.fullmatch(
         r"(\d{2,3})/(\d{1,2})/(\d{1,2})\s*\**",
         value,
     )
-
     if not match:
-        raise ValueError(
-            f"日期格式異常：{value}"
-        )
+        raise ValueError(f"日期格式異常：{value}")
 
-    year, month, day = map(
-        int,
-        match.groups(),
-    )
-
-    trading_day = date(
-        year + 1911,
-        month,
-        day,
-    )
-
-    if (
-        trading_day.strftime("%Y-%m")
-        != expected_month
-    ):
-        raise ValueError(
-            f"日期不屬於查詢月份：{value}"
-        )
-
+    year, month, day = map(int, match.groups())
+    trading_day = date(year + 1911, month, day)
+    if trading_day.strftime("%Y-%m") != expected_month:
+        raise ValueError(f"日期不屬於查詢月份：{value}")
     return trading_day
 
 
 def parse_month(payload, code, expected_month):
     if not isinstance(payload, dict):
-        raise ValueError(
-            "官方回傳格式異常"
-        )
+        raise ValueError("官方回傳格式異常")
 
-    if str(
-        payload.get("stat", "")
-    ).lower() != "ok":
-        raise ValueError(
-            f"官方狀態異常：{payload.get('stat')}"
-        )
+    if str(payload.get("stat", "")).lower() != "ok":
+        raise ValueError(f"官方狀態異常：{payload.get('stat')}")
 
     tables = payload.get("tables")
-
     if not isinstance(tables, list):
-        raise ValueError(
-            "官方行情表格格式異常"
-        )
+        raise ValueError("官方行情表格格式異常")
 
     if not tables:
         print(
-            f"NO_DATA {code} {expected_month}: "
-            "官方回傳空表格",
+            f"NO_DATA {code} {expected_month}: 官方回傳空表格",
             flush=True,
         )
         return []
 
     table = tables[0]
-
     if not isinstance(table, dict):
-        raise ValueError(
-            "官方行情表格內容異常"
-        )
+        raise ValueError("官方行情表格內容異常")
 
     fields = table.get("fields")
     source_rows = table.get("data")
-
     required = (
         "日 期",
         "成交張數",
         "成交仟元",
         "收盤",
     )
-
     if not isinstance(fields, list):
-        raise ValueError(
-            "官方欄位格式異常"
-        )
+        raise ValueError("官方欄位格式異常")
 
     positions = {}
-
     for field in required:
         if field not in fields:
-            raise ValueError(
-                f"缺少欄位：{field}；實際：{fields}"
-            )
-
+            raise ValueError(f"缺少欄位：{field}；實際：{fields}")
         positions[field] = fields.index(field)
 
     if not isinstance(source_rows, list):
-        raise ValueError(
-            "官方每日行情資料格式異常"
-        )
+        raise ValueError("官方每日行情資料格式異常")
 
     if not source_rows:
         print(
-            f"NO_DATA {code} {expected_month}: "
-            "官方沒有提供每日行情",
+            f"NO_DATA {code} {expected_month}: 官方沒有提供每日行情",
             flush=True,
         )
         return []
 
-    name = str(
-        payload.get("name") or code
-    ).strip()
-
+    name = str(payload.get("name") or code).strip()
     records = []
     seen_dates = set()
 
     for item in source_rows:
         try:
             if not isinstance(item, list):
-                raise ValueError(
-                    "每日行情列格式異常"
-                )
+                raise ValueError("每日行情列格式異常")
 
-            raw_date = str(
-                item[positions["日 期"]]
-            ).strip()
-
-            trading_day = parse_roc_date(
-                raw_date,
-                expected_month,
-            )
-
+            raw_date = str(item[positions["日 期"]]).strip()
+            trading_day = parse_roc_date(raw_date, expected_month)
             if trading_day in seen_dates:
-                raise ValueError(
-                    f"官方資料日期重複：{raw_date}"
-                )
-
+                raise ValueError(f"官方資料日期重複：{raw_date}")
             seen_dates.add(trading_day)
 
-            close = num(
-                item[positions["收盤"]]
-            )
-
+            close = num(item[positions["收盤"]])
             if close is None or close <= 0:
                 print(
-                    f"SKIP {code} {raw_date}: "
-                    "無有效收盤價",
+                    f"SKIP {code} {raw_date}: 無有效收盤價",
                     flush=True,
                 )
                 continue
 
-            volume = num(
-                item[positions["成交張數"]]
-            )
-
-            amount = num(
-                item[positions["成交仟元"]]
-            )
-
+            volume = num(item[positions["成交張數"]])
+            amount = num(item[positions["成交仟元"]])
             if volume is None or amount is None:
-                raise ValueError(
-                    f"成交量或金額異常：{raw_date}"
-                )
-
+                raise ValueError(f"成交量或金額異常：{raw_date}")
             if volume < 0 or amount < 0:
-                raise ValueError(
-                    f"成交量或金額為負數：{raw_date}"
-                )
+                raise ValueError(f"成交量或金額為負數：{raw_date}")
 
             records.append(
                 (
@@ -243,22 +166,14 @@ def parse_month(payload, code, expected_month):
                 )
             )
 
-        except (
-            IndexError,
-            TypeError,
-            ValueError,
-        ) as exc:
-            raise ValueError(
-                f"資料驗證失敗：{exc}"
-            ) from exc
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError(f"資料驗證失敗：{exc}") from exc
 
     if not records:
         print(
-            f"NO_DATA {code} {expected_month}: "
-            "該月沒有有效收盤價紀錄",
+            f"NO_DATA {code} {expected_month}: 該月沒有有效收盤價紀錄",
             flush=True,
         )
-
     return records
 
 
@@ -266,8 +181,7 @@ def create_progress_table(conn):
     with conn.cursor() as cur:
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS
-            backfill_progress (
+            CREATE TABLE IF NOT EXISTS backfill_progress (
                 market TEXT NOT NULL,
                 code TEXT NOT NULL,
                 month TEXT NOT NULL,
@@ -278,7 +192,6 @@ def create_progress_table(conn):
             )
             """
         )
-
     conn.commit()
 
 
@@ -286,15 +199,11 @@ def is_completed(conn, code, month):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT 1
-            FROM backfill_progress
-            WHERE market = %s
-              AND code = %s
-              AND month = %s
+            SELECT 1 FROM backfill_progress
+            WHERE market = %s AND code = %s AND month = %s
             """,
             (PROGRESS_MARKET, code, month),
         )
-
         return cur.fetchone() is not None
 
 
@@ -310,50 +219,56 @@ def mark_completed(conn, code, month, row_count):
                 row_count = EXCLUDED.row_count,
                 completed_at = CURRENT_TIMESTAMP
             """,
-            (
-                PROGRESS_MARKET,
-                code,
-                month,
-                row_count,
-            ),
+            (PROGRESS_MARKET, code, month, row_count),
         )
-
     conn.commit()
 
 
-def store_without_overwriting(conn, records):
-    """Insert only missing prices.
+def current_month_has_tpex_data(conn, today):
+    """Check for any current-month TPEX record in the database.
 
-    Keep existing TPEX daily data unchanged.
+    public.prices.date is TEXT (YYYY-MM-DD).
     """
+    month_start = today.replace(day=1)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM public.prices
+                WHERE market = %s
+                  AND date >= %s
+                  AND date <= %s
+            )
+            """,
+            (
+                PRICE_MARKET,
+                month_start.isoformat(),
+                today.isoformat(),
+            ),
+        )
+        return bool(cur.fetchone()[0])
 
+
+def store_without_overwriting(conn, records):
+    """Insert missing price rows only."""
     if not records:
         return 0
 
     sql = """
         INSERT INTO public.prices (
-            date,
-            market,
-            code,
-            name,
-            close,
-            volume,
-            amount
+            date, market, code, name, close, volume, amount
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (date, market, code)
         DO NOTHING
     """
-
     try:
         with conn.cursor() as cur:
             cur.executemany(sql, records)
             inserted = cur.rowcount
-
         conn.commit()
-
         return inserted
-
     except Exception:
         conn.rollback()
         raise
@@ -366,34 +281,20 @@ def get_month(session, code, month):
         "id": "",
         "response": "json",
     }
-
     last_error = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = session.get(
-                API,
-                params=params,
-                timeout=45,
-            )
-
+            response = session.get(API, params=params, timeout=45)
             response.raise_for_status()
-
             return response.json()
-
-        except (
-            requests.RequestException,
-            ValueError,
-        ) as exc:
+        except (requests.RequestException, ValueError) as exc:
             last_error = exc
-
             print(
-                f"RETRY {code} "
-                f"{month.strftime('%Y-%m')} "
+                f"RETRY {code} {month.strftime('%Y-%m')} "
                 f"{attempt}/{MAX_RETRIES}: {exc}",
                 flush=True,
             )
-
             if attempt < MAX_RETRIES:
                 time.sleep(attempt * 3)
 
@@ -405,30 +306,12 @@ def get_month(session, code, month):
 
 def main():
     parser = argparse.ArgumentParser()
-
+    parser.add_argument("--codes", default="1240")
+    parser.add_argument("--months", type=int, default=2)
+    parser.add_argument("--delay", type=float, default=2.0)
     parser.add_argument(
-        "--codes",
-        default="1240",
+        "--write", action="store_true", help="正式寫入 Supabase"
     )
-
-    parser.add_argument(
-        "--months",
-        type=int,
-        default=2,
-    )
-
-    parser.add_argument(
-        "--delay",
-        type=float,
-        default=2.0,
-    )
-
-    parser.add_argument(
-        "--write",
-        action="store_true",
-        help="正式寫入 Supabase",
-    )
-
     args = parser.parse_args()
 
     codes = list(
@@ -438,157 +321,131 @@ def main():
             if code.strip()
         )
     )
-
     if not 1 <= len(codes) <= 20:
-        raise ValueError(
-            "每批只允許 1 至 20 檔"
-        )
-
-    if not all(
-        re.fullmatch(r"\d{4}", code)
-        for code in codes
-    ):
-        raise ValueError(
-            "股票代號必須為四碼數字"
-        )
-
+        raise ValueError("每批只允許 1 至 20 檔")
+    if not all(re.fullmatch(r"\d{4}", code) for code in codes):
+        raise ValueError("股票代號必須為四碼數字")
     if not 1 <= args.months <= 12:
-        raise ValueError(
-            "月份必須介於 1 至 12"
-        )
+        raise ValueError("月份必須介於 1 至 12")
+    if args.delay < 0:
+        raise ValueError("delay 不可為負數")
 
     database_url = os.getenv("DATABASE_URL")
-
     if args.write and not database_url:
-        raise RuntimeError(
-            "正式寫入模式缺少 DATABASE_URL"
-        )
+        raise RuntimeError("正式寫入模式缺少 DATABASE_URL")
 
     total = 0
     written = 0
     skipped = 0
     no_data = 0
+    pending_current_month = 0
     failures = []
 
-    current_month = (
-        taiwan_today().strftime("%Y-%m")
-    )
-
+    today = taiwan_today()
+    current_month = today.strftime("%Y-%m")
     progress_conn = None
 
     try:
         if args.write:
             progress_conn = psycopg.connect(
-                database_url,
-                connect_timeout=15,
+                database_url, connect_timeout=15
             )
+            create_progress_table(progress_conn)
 
-            create_progress_table(
-                progress_conn
+            # Only an observation, not a completion marker.
+            has_current_data = current_month_has_tpex_data(
+                progress_conn, today
             )
+            if not has_current_data:
+                print(
+                    f"PENDING {current_month}: "
+                    "資料庫尚無本月 TPEX 行情；"
+                    "暫緩當月查詢，歷史月份照常回補。",
+                    flush=True,
+                )
+        else:
+            # Allow dry runs to inspect the official API.
+            has_current_data = True
 
         with requests.Session() as session:
             session.headers.update(HEADERS)
 
             for code in codes:
-                for month in months_back(
-                    args.months
-                ):
-                    month_key = (
-                        month.strftime("%Y-%m")
-                    )
-
+                for month in months_back(args.months):
+                    month_key = month.strftime("%Y-%m")
                     label = f"{code} {month_key}"
+                    is_current_month = month_key == current_month
+
+                    if is_current_month and not has_current_data:
+                        pending_current_month += 1
+                        print(
+                            f"PENDING_CURRENT_MONTH {label}: "
+                            "本月尚無上櫃行情，等待下次執行",
+                            flush=True,
+                        )
+                        continue
 
                     if (
                         args.write
-                        and month_key != current_month
-                        and is_completed(
-                            progress_conn,
-                            code,
-                            month_key,
-                        )
+                        and not is_current_month
+                        and is_completed(progress_conn, code, month_key)
                     ):
                         skipped += 1
-
                         print(
-                            f"SKIPPED {label}: "
-                            "已完成或已查核無資料",
+                            f"SKIPPED {label}: 已完成或已查核無資料",
                             flush=True,
                         )
-
                         continue
 
                     try:
-                        payload = get_month(
-                            session,
-                            code,
-                            month,
-                        )
-
-                        records = parse_month(
-                            payload,
-                            code,
-                            month_key,
-                        )
-
+                        payload = get_month(session, code, month)
+                        records = parse_month(payload, code, month_key)
                         total += len(records)
 
                         if not records:
-                            no_data += 1
-
-                            if (
-                                args.write
-                                and month_key != current_month
-                            ):
-                                mark_completed(
-                                    progress_conn,
-                                    code,
-                                    month_key,
-                                    0,
+                            if is_current_month:
+                                # Never mark an open month completed.
+                                pending_current_month += 1
+                                print(
+                                    f"PENDING_CURRENT_MONTH {label}: "
+                                    "官方暫無有效行情，下次重新查詢",
+                                    flush=True,
                                 )
-
-                            print(
-                                f"VERIFIED_NO_DATA "
-                                f"{label}: 0 rows",
-                                flush=True,
-                            )
+                            else:
+                                no_data += 1
+                                if args.write:
+                                    mark_completed(
+                                        progress_conn, code, month_key, 0
+                                    )
+                                print(
+                                    f"VERIFIED_NO_DATA {label}: 0 rows",
+                                    flush=True,
+                                )
 
                         elif args.write:
                             count = store_without_overwriting(
-                                progress_conn,
-                                records,
+                                progress_conn, records
                             )
-
                             written += count
-
-                            if month_key != current_month:
+                            if not is_current_month:
                                 mark_completed(
                                     progress_conn,
                                     code,
                                     month_key,
                                     len(records),
                                 )
-
                             print(
-                                f"WRITTEN {label}: "
-                                f"{count} new rows; "
+                                f"WRITTEN {label}: {count} new rows; "
                                 f"{len(records)} valid rows",
                                 flush=True,
                             )
-
                         else:
                             print(
-                                f"OK {label}: "
-                                f"{len(records)} valid rows",
+                                f"OK {label}: {len(records)} valid rows",
                                 flush=True,
                             )
-
                             for row in records[:3]:
-                                print(
-                                    "SAMPLE:",
-                                    row,
-                                )
+                                print("SAMPLE:", row)
 
                     except Exception as exc:
                         if (
@@ -596,61 +453,32 @@ def main():
                             and not progress_conn.closed
                         ):
                             progress_conn.rollback()
+                        failures.append(f"{label}: {exc}")
+                        print(f"FAILED {label}: {exc}", flush=True)
 
-                        failures.append(
-                            f"{label}: {exc}"
-                        )
-
-                        print(
-                            f"FAILED {label}: {exc}",
-                            flush=True,
-                        )
-
-                    time.sleep(
-                        max(1.5, args.delay)
-                    )
+                    time.sleep(max(1.5, args.delay))
 
     finally:
         if progress_conn is not None:
             progress_conn.close()
 
-    print(
-        "\n===== TPEx 回補總結 =====",
-        flush=True,
-    )
-
-    print(
-        "模式：",
-        "WRITE" if args.write else "DRY RUN",
-    )
-
+    print("\n===== TPEx 回補總結 =====", flush=True)
+    print("模式：", "WRITE" if args.write else "DRY RUN")
     print("有效資料筆數：", total)
     print("新增寫入筆數：", written)
     print("跳過已查核月份數：", skipped)
-    print("官方確認無行情月份數：", no_data)
+    print("已結束月份無行情數：", no_data)
+    print("當月暫緩查詢數：", pending_current_month)
     print("失敗月份數：", len(failures))
-
-    print(
-        "行情市場標記：",
-        PRICE_MARKET,
-    )
-
-    print(
-        "進度市場標記：",
-        PROGRESS_MARKET,
-    )
+    print("行情市場標記：", PRICE_MARKET)
+    print("進度市場標記：", PROGRESS_MARKET)
 
     for failure in failures:
-        print(
-            "FAILED_DETAIL",
-            failure,
-            flush=True,
-        )
+        print("FAILED_DETAIL", failure, flush=True)
 
     if failures:
         raise RuntimeError(
-            "仍有月份處理失敗；"
-            "成功資料及進度已保留，"
+            "仍有月份處理失敗；成功資料及進度已保留，"
             "請查看 FAILED_DETAIL"
         )
 
