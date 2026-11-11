@@ -3,8 +3,12 @@ name: Update Taiwan Stock Data
 
 on:
   workflow_dispatch:
+  
   schedule:
-    - cron: '30 9 * * 1-5'
+    - cron: '30 9 * * 1-5'   # 台灣 17:30
+    - cron: '17 11 * * 1-5'  # 台灣 19:17 備援
+    - cron: '37 13 * * 1-5'  # 台灣 21:37 備援
+
 
 permissions:
   contents: read
