@@ -158,7 +158,7 @@ jobs:
                       for market in ("TWSE", "TPEX"):
                           try:
                               records = parse(fetch(session, market, day), market, day)
-                              inserted = store(database_url, records)
+                              inserted = 0  # DRY RUN：只檢查行情，不寫入資料庫
                               print(f"REPAIR_OK {day} {market}: valid={len(records)} inserted={inserted}", flush=True)
                           except Exception as exc:
                               failures.append(f"{day} {market}: {exc}")
