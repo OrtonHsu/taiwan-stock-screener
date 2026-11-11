@@ -157,8 +157,65 @@ jobs:
                   for day in DAYS:
                       for market in ("TWSE", "TPEX"):
                           try:
-                              records = parse(fetch(session, market, day), market, day)
-                              inserted = 0  # DRY RUN：只檢查行情，不寫入資料庫
+                              
+records = parse(fetch(session, market, day), market, day)
+
+# Cross-check TPEx day with independent official monthly prices.
+if market == "TPEX":
+    confirmed = False
+    roc_day = f"{day.year - 1911}/{day.month:02d}/{day.day:02d}"
+
+    for sample in records[:5]:
+        try:
+            response = session.get(
+                "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock",
+                params={
+                    "code": sample[2],
+                    "date": day.replace(day=1).strftime("%Y/%m/%d"),
+                    "id": "",
+                    "response": "json",
+                },
+                timeout=35,
+            )
+            response.raise_for_status()
+            monthly = response.json()
+
+            for table in monthly.get("tables", []):
+                fields = table.get("fields", [])
+                if "日 期" not in fields or "收盤" not in fields:
+                    continue
+
+                date_idx = fields.index("日 期")
+                close_idx = fields.index("收盤")
+
+                for row in table.get("data", []):
+                    record_day = str(row[date_idx]).strip().rstrip("*").strip()
+                    reference_close = number(row[close_idx])
+
+                    if (
+                        record_day == roc_day
+                        and reference_close is not None
+                        and abs(reference_close - float(sample[4])) < 0.001
+                    ):
+                        confirmed = True
+                        break
+
+                if confirmed:
+                    break
+
+            if confirmed:
+                break
+
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+            print(f"TPEX DATE CHECK RETRY {sample[2]}: {exc}", flush=True)
+
+    if not confirmed:
+        raise ValueError(f"TPEX {day}: 獨立月行情日期驗證失敗")
+
+    print(f"TPEX DATE VERIFIED: {day}", flush=True)
+
+inserted = store(database_url, records)
+
                               print(f"REPAIR_OK {day} {market}: valid={len(records)} inserted={inserted}", flush=True)
                           except Exception as exc:
                               failures.append(f"{day} {market}: {exc}")
