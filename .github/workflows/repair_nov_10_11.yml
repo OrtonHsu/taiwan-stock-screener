@@ -14,17 +14,21 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: pip install requests 'psycopg[binary]'
+
       - name: Repair missing market days
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           python - <<'PYCODE'
-          """One-time repair of 2026-11-10/11 full-market daily closing quotes."""
+          """Repair official 2026-11-10/11 market snapshots."""
+
           import os
           import re
           import time
@@ -33,197 +37,549 @@ jobs:
           import psycopg
           import requests
 
-          DAYS = (date(2026, 11, 10), date(2026, 11, 11))
+          DAYS = (
+              date(2026, 11, 10),
+              date(2026, 11, 11),
+          )
+
           URLS = {
               "TWSE": "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
               "TPEX": "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc",
           }
-          MINIMUM = {"TWSE": 900, "TPEX": 700}
-          HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
+          TPEX_MONTHLY = (
+              "https://www.tpex.org.tw/www/zh-tw/"
+              "afterTrading/tradingStock"
+          )
+
+          MINIMUM = {
+              "TWSE": 900,
+              "TPEX": 700,
+          }
+
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0",
+              "Accept": "application/json",
+          }
 
 
           def number(value):
-              cleaned = str(value or "").replace(",", "").strip()
+              cleaned = str(
+                  value if value is not None else ""
+              ).replace(",", "").strip()
+
               try:
                   return float(cleaned)
-              except ValueError:
+              except (ValueError, TypeError):
                   return None
 
 
           def fetch(session, market, day):
-              params = (
-                  {"date": day.strftime("%Y%m%d"), "type": "ALLBUT0999", "response": "json"}
-                  if market == "TWSE" else
-                  {"date": day.strftime("%Y/%m/%d"), "type": "EW", "response": "json"}
-              )
+              if market == "TWSE":
+                  params = {
+                      "date": day.strftime("%Y%m%d"),
+                      "type": "ALLBUT0999",
+                      "response": "json",
+                  }
+              else:
+                  params = {
+                      "date": day.strftime("%Y/%m/%d"),
+                      "type": "EW",
+                      "response": "json",
+                  }
+
               last_error = None
+
               for attempt in range(1, 5):
                   try:
-                      response = session.get(URLS[market], params=params, timeout=50)
+                      response = session.get(
+                          URLS[market],
+                          params=params,
+                          timeout=50,
+                      )
+
                       response.raise_for_status()
                       payload = response.json()
-                      if not isinstance(payload, dict) or str(payload.get("stat", "")).lower() != "ok":
-                          raise ValueError(f"官方狀態異常：{str(payload.get('stat'))[:150]}")
+
+                      if (
+                          not isinstance(payload, dict)
+                          or str(
+                              payload.get("stat", "")
+                          ).lower() != "ok"
+                      ):
+                          raise ValueError(
+                              "官方狀態異常: "
+                              f"{str(payload.get('stat'))[:120]}"
+                          )
+
                       return payload
-                  except (requests.RequestException, ValueError) as exc:
+
+                  except (
+                      requests.RequestException,
+                      ValueError,
+                  ) as exc:
                       last_error = exc
-                      print(f"RETRY {market} {day} attempt={attempt}: {exc}", flush=True)
+
+                      print(
+                          f"RETRY {market} {day} "
+                          f"{attempt}/4: {exc}",
+                          flush=True,
+                      )
+
                       if attempt < 4:
                           time.sleep(attempt * 3)
-              raise RuntimeError(f"官方下載失敗：{last_error}")
+
+              raise RuntimeError(
+                  f"{market} {day} 官方下載失敗: "
+                  f"{last_error}"
+              )
 
 
           def parse(payload, market, day):
-              required = (
-                  ("證券代號", "證券名稱", "收盤價", "成交股數", "成交金額")
-                  if market == "TWSE" else
-                  ("代號", "名稱", "收盤", "成交股數", "成交金額(元)")
-              )
+              if market == "TWSE":
+                  required = (
+                      "證券代號",
+                      "證券名稱",
+                      "收盤價",
+                      "成交股數",
+                      "成交金額",
+                  )
+              else:
+                  required = (
+                      "代號",
+                      "名稱",
+                      "收盤",
+                      "成交股數",
+                      "成交金額(元)",
+                  )
+
               tables = payload.get("tables")
+
               if not isinstance(tables, list):
-                  raise ValueError("官方沒有 tables")
+                  raise ValueError(
+                      f"{market}: 官方缺少行情表格"
+                  )
+
               table = None
-              columns = None
+              positions = None
+
               for candidate in tables:
-                  if not isinstance(candidate, dict) or not isinstance(candidate.get("fields"), list):
+                  if not isinstance(candidate, dict):
                       continue
-                  names = [re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", str(f))) for f in candidate["fields"]]
-                  if all(key in names for key in required):
-                      table, columns = candidate, {key: names.index(key) for key in required}
+
+                  fields = candidate.get("fields")
+
+                  if not isinstance(fields, list):
+                      continue
+
+                  names = [
+                      re.sub(
+                          r"\s+",
+                          "",
+                          re.sub(
+                              r"<[^>]+>",
+                              "",
+                              str(field),
+                          ),
+                      )
+                      for field in fields
+                  ]
+
+                  if all(
+                      name in names
+                      for name in required
+                  ):
+                      table = candidate
+
+                      positions = {
+                          name: names.index(name)
+                          for name in required
+                      }
                       break
+
               if table is None:
-                  raise ValueError(f"{market} 找不到預期收盤價表格，拒絕寫入")
+                  raise ValueError(
+                      f"{market}: 找不到預期的個股行情表格"
+                  )
 
               if market == "TWSE":
-                  title = str(table.get("title", ""))
-                  match = re.search(r"(\d{2,3})年\s*(\d{1,2})月\s*(\d{1,2})日", title)
-                  if not match:
-                      raise ValueError(f"無法從 TWSE 表格標題驗證日期：{title[:100]}")
-                  y, m, d = map(int, match.groups())
-                  if date(y + 1911, m, d) != day:
-                      raise ValueError(f"TWSE 回傳日期不符 {title}")
+                  title = str(
+                      table.get("title", "")
+                  )
 
-              rows = table.get("data")
-              if not isinstance(rows, list):
-                  raise ValueError("官方表格沒有有效的 data")
-              records, seen = [], set()
-              for row in rows:
-                  if not isinstance(row, list):
+                  match = re.search(
+                      r"(\d{2,3})年\s*"
+                      r"(\d{1,2})月\s*"
+                      r"(\d{1,2})日",
+                      title,
+                  )
+
+                  if not match:
+                      raise ValueError(
+                          "TWSE 表格沒有可驗證的日期: "
+                          f"{title[:100]}"
+                      )
+
+                  year, month, day_num = map(
+                      int,
+                      match.groups(),
+                  )
+
+                  official_day = date(
+                      year + 1911,
+                      month,
+                      day_num,
+                  )
+
+                  if official_day != day:
+                      raise ValueError(
+                          "TWSE 官方回傳日期錯誤: "
+                          f"{title}"
+                      )
+
+              source_rows = table.get("data")
+
+              if not isinstance(source_rows, list):
+                  raise ValueError(
+                      f"{market}: 表格沒有有效行情資料"
+                  )
+
+              records = []
+              seen = set()
+
+              for item in source_rows:
+                  if not isinstance(item, list):
                       continue
-                  code = str(row[columns[required[0]]]).strip()
-                  if not re.fullmatch(r"\d{4}", code):
+
+                  try:
+                      code = str(
+                          item[positions[required[0]]]
+                      ).strip()
+
+                      if not re.fullmatch(
+                          r"\d{4}",
+                          code,
+                      ):
+                          continue
+
+                      name = str(
+                          item[positions[required[1]]]
+                      ).strip() or code
+
+                      close = number(
+                          item[positions[required[2]]]
+                      )
+
+                      volume = number(
+                          item[positions[required[3]]]
+                      )
+
+                      amount = number(
+                          item[positions[required[4]]]
+                      )
+
+                  except (
+                      IndexError,
+                      TypeError,
+                      ValueError,
+                  ):
                       continue
-                  close = number(row[columns[required[2]]])
-                  volume = number(row[columns[required[3]]])
-                  amount = number(row[columns[required[4]]])
-                  if close is None or volume is None or amount is None:
+
+                  if (
+                      close is None
+                      or volume is None
+                      or amount is None
+                  ):
                       continue
-                  if close <= 0 or volume <= 0 or amount < 0:
+
+                  if (
+                      close <= 0
+                      or volume <= 0
+                      or amount < 0
+                  ):
                       continue
+
                   if code in seen:
-                      raise ValueError(f"官方同日重複代號：{code}")
+                      raise ValueError(
+                          f"{market}: 官方重複股票代號 "
+                          f"{code}"
+                      )
+
                   seen.add(code)
-                  records.append((day.isoformat(), market, code,
-                                  str(row[columns[required[1]]]).strip() or code,
-                                  close, volume, amount))
+
+                  records.append(
+                      (
+                          day.isoformat(),
+                          market,
+                          code,
+                          name,
+                          close,
+                          volume,
+                          amount,
+                      )
+                  )
 
               if len(records) < MINIMUM[market]:
-                  raise ValueError(f"{market} {day} 僅 {len(records)} 檔，低於安全門檻 {MINIMUM[market]}，拒絕寫入")
+                  raise ValueError(
+                      f"{market} {day} "
+                      f"只有 {len(records)} 檔，"
+                      "低於安全門檻 "
+                      f"{MINIMUM[market]}，拒絕寫入"
+                  )
+
               return records
+
+
+          def verify_tpex_day(session, day, records):
+              """Cross-check official date and close prices."""
+
+              roc_day = (
+                  f"{day.year - 1911}/"
+                  f"{day.month:02d}/"
+                  f"{day.day:02d}"
+              )
+
+              confirmed = 0
+
+              for sample in records[:5]:
+                  try:
+                      response = session.get(
+                          TPEX_MONTHLY,
+                          params={
+                              "code": sample[2],
+                              "date": day.replace(
+                                  day=1
+                              ).strftime("%Y/%m/%d"),
+                              "id": "",
+                              "response": "json",
+                          },
+                          timeout=35,
+                      )
+
+                      response.raise_for_status()
+                      monthly = response.json()
+
+                      if not isinstance(monthly, dict):
+                          continue
+
+                      if str(
+                          monthly.get("stat", "")
+                      ).lower() != "ok":
+                          continue
+
+                      tables = monthly.get(
+                          "tables",
+                          [],
+                      )
+
+                      if not isinstance(tables, list):
+                          continue
+
+                      matched = False
+
+                      for table in tables:
+                          if not isinstance(table, dict):
+                              continue
+
+                          fields = table.get(
+                              "fields",
+                              [],
+                          )
+
+                          if (
+                              "日 期" not in fields
+                              or "收盤" not in fields
+                          ):
+                              continue
+
+                          date_col = fields.index(
+                              "日 期"
+                          )
+
+                          close_col = fields.index(
+                              "收盤"
+                          )
+
+                          for item in table.get(
+                              "data",
+                              [],
+                          ):
+                              if not isinstance(item, list):
+                                  continue
+
+                              raw_day = str(
+                                  item[date_col]
+                              ).strip().rstrip("*").strip()
+
+                              price = number(
+                                  item[close_col]
+                              )
+
+                              if (
+                                  raw_day == roc_day
+                                  and price is not None
+                                  and abs(
+                                      price - float(sample[4])
+                                  ) < 0.001
+                              ):
+                                  matched = True
+                                  break
+
+                          if matched:
+                              break
+
+                      if matched:
+                          confirmed += 1
+
+                          print(
+                              "TPEX_DATE_SAMPLE_OK "
+                              f"{day} {sample[2]}",
+                              flush=True,
+                          )
+
+                  except (
+                      requests.RequestException,
+                      ValueError,
+                      KeyError,
+                      IndexError,
+                      TypeError,
+                  ) as exc:
+                      print(
+                          "TPEX_DATE_CHECK_ERROR "
+                          f"{day} {sample[2]}: {exc}",
+                          flush=True,
+                      )
+
+              if confirmed < 2:
+                  raise ValueError(
+                      f"TPEX {day}: 僅 "
+                      f"{confirmed}/5 檔通過"
+                      "獨立月行情日期與價格驗證；"
+                      "拒絕寫入"
+                  )
+
+              print(
+                  f"TPEX_DATE_VERIFIED "
+                  f"{day}: {confirmed}/5",
+                  flush=True,
+              )
 
 
           def store(database_url, records):
               sql = """
                   INSERT INTO public.prices
-                      (date, market, code, name, close, volume, amount)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s)
-                  ON CONFLICT (date, market, code) DO NOTHING
+                      (
+                          date,
+                          market,
+                          code,
+                          name,
+                          close,
+                          volume,
+                          amount
+                      )
+                  VALUES (
+                      %s, %s, %s, %s, %s, %s, %s
+                  )
+                  ON CONFLICT (
+                      date,
+                      market,
+                      code
+                  )
+                  DO NOTHING
               """
-              with psycopg.connect(database_url) as conn:
+
+              with psycopg.connect(
+                  database_url
+              ) as conn:
                   with conn.cursor() as cur:
-                      cur.executemany(sql, records)
-                      count = cur.rowcount
+                      cur.executemany(
+                          sql,
+                          records,
+                      )
+
+                      inserted = cur.rowcount
+
                   conn.commit()
-              return count
+
+              return inserted
 
 
           def main():
-              database_url = os.environ.get("DATABASE_URL")
+              database_url = os.environ.get(
+                  "DATABASE_URL"
+              )
+
               if not database_url:
-                  raise RuntimeError("Missing DATABASE_URL")
+                  raise RuntimeError(
+                      "Missing DATABASE_URL"
+                  )
+
               failures = []
+
               with requests.Session() as session:
                   session.headers.update(HEADERS)
+
                   for day in DAYS:
-                      for market in ("TWSE", "TPEX"):
+                      for market in (
+                          "TWSE",
+                          "TPEX",
+                      ):
                           try:
-                              
-records = parse(fetch(session, market, day), market, day)
+                              records = parse(
+                                  fetch(
+                                      session,
+                                      market,
+                                      day,
+                                  ),
+                                  market,
+                                  day,
+                              )
 
-# Cross-check TPEx day with independent official monthly prices.
-if market == "TPEX":
-    confirmed = False
-    roc_day = f"{day.year - 1911}/{day.month:02d}/{day.day:02d}"
+                              if market == "TPEX":
+                                  verify_tpex_day(
+                                      session,
+                                      day,
+                                      records,
+                                  )
 
-    for sample in records[:5]:
-        try:
-            response = session.get(
-                "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock",
-                params={
-                    "code": sample[2],
-                    "date": day.replace(day=1).strftime("%Y/%m/%d"),
-                    "id": "",
-                    "response": "json",
-                },
-                timeout=35,
-            )
-            response.raise_for_status()
-            monthly = response.json()
+                              inserted = store(
+                                  database_url,
+                                  records,
+                              )
 
-            for table in monthly.get("tables", []):
-                fields = table.get("fields", [])
-                if "日 期" not in fields or "收盤" not in fields:
-                    continue
+                              print(
+                                  f"REPAIR_OK {day} "
+                                  f"{market}: "
+                                  f"valid={len(records)} "
+                                  f"inserted={inserted}",
+                                  flush=True,
+                              )
 
-                date_idx = fields.index("日 期")
-                close_idx = fields.index("收盤")
-
-                for row in table.get("data", []):
-                    record_day = str(row[date_idx]).strip().rstrip("*").strip()
-                    reference_close = number(row[close_idx])
-
-                    if (
-                        record_day == roc_day
-                        and reference_close is not None
-                        and abs(reference_close - float(sample[4])) < 0.001
-                    ):
-                        confirmed = True
-                        break
-
-                if confirmed:
-                    break
-
-            if confirmed:
-                break
-
-        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
-            print(f"TPEX DATE CHECK RETRY {sample[2]}: {exc}", flush=True)
-
-    if not confirmed:
-        raise ValueError(f"TPEX {day}: 獨立月行情日期驗證失敗")
-
-    print(f"TPEX DATE VERIFIED: {day}", flush=True)
-
-inserted = store(database_url, records)
-
-                              print(f"REPAIR_OK {day} {market}: valid={len(records)} inserted={inserted}", flush=True)
                           except Exception as exc:
-                              failures.append(f"{day} {market}: {exc}")
-                              print(f"REPAIR_FAILED {day} {market}: {exc}", flush=True)
+                              failures.append(
+                                  f"{day} {market}: {exc}"
+                              )
+
+                              print(
+                                  f"REPAIR_FAILED "
+                                  f"{day} {market}: "
+                                  f"{exc}",
+                                  flush=True,
+                              )
+
                           time.sleep(2)
+
               if failures:
-                  raise RuntimeError("部分補檔失敗：" + " | ".join(failures))
-              print("REPAIR_ALL_OK: 2026-11-10 / 2026-11-11", flush=True)
+                  raise RuntimeError(
+                      "部分補檔失敗："
+                      + " | ".join(failures)
+                  )
+
+              print(
+                  "REPAIR_ALL_OK: "
+                  "2026-11-10 / 2026-11-11",
+                  flush=True,
+              )
 
 
           if __name__ == "__main__":
