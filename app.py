@@ -60,12 +60,61 @@ if recognized.empty:
     st.error("找不到 TWSE 或 TPEX 行情，請先確認市場標記。")
     st.stop()
 
-latest = recognized["date"].max()
-today = datetime.now(ZoneInfo("Asia/Taipei")).date().isoformat()
-latest_prices = recognized[recognized["date"] == latest]
-latest_count = len(latest_prices[["market", "code"]].drop_duplicates())
-market_counts = latest_prices.groupby("market")["code"].nunique().to_dict()
+
+# 只使用市場覆蓋量足夠的交易日
+day_counts = (
+    recognized.groupby(["date", "market"])["code"]
+    .nunique()
+    .unstack(fill_value=0)
+)
+
+for market in ("TWSE", "TPEX"):
+    if market not in day_counts.columns:
+        day_counts[market] = 0
+
+valid_days = day_counts.index[
+    (day_counts["TWSE"] >= 900)
+    & (day_counts["TPEX"] >= 700)
+]
+
+if len(valid_days) == 0:
+    st.error("尚無足夠完整的市場行情，暫停選股。")
+    st.stop()
+
+raw_latest = recognized["date"].max()
+latest = valid_days.max()
+
+if raw_latest != latest:
+    st.warning(
+        f"最新日期 {raw_latest} 行情不完整，"
+        f"已自動改用 {latest} 進行選股。"
+    )
+
+# 排除選股基準日之後的不完整行情
+recognized = recognized[
+    recognized["date"] <= latest
+].copy()
+
+today = datetime.now(
+    ZoneInfo("Asia/Taipei")
+).date().isoformat()
+
+latest_prices = recognized[
+    recognized["date"] == latest
+]
+
+latest_count = len(
+    latest_prices[["market", "code"]].drop_duplicates()
+)
+
+market_counts = (
+    latest_prices.groupby("market")["code"]
+    .nunique()
+    .to_dict()
+)
+
 trading_days = recognized["date"].nunique()
+
 
 profiles = pd.DataFrame()
 heat = pd.DataFrame()
