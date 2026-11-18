@@ -7,7 +7,7 @@ market writes, but fail the workflow when either market was not saved.
 
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -536,17 +536,32 @@ def get_with_retries(session, market, today):
     )
 
 
+def eligible_market_day(now):
+    """Choose the last weekday whose regular session could have closed.
+
+    GitHub's scheduled jobs can start after midnight Taiwan time.
+    Exchange holidays and stale quotes remain subject to the official
+    trading-date checks inside get_twse/get_tpex.
+    """
+    target = now.date()
+    if now.hour < 16:
+        target -= timedelta(days=1)
+    while target.weekday() >= 5:
+        target -= timedelta(days=1)
+    return target.isoformat()
+
+
 def main():
     now = datetime.now(
         ZoneInfo("Asia/Taipei")
     )
 
-    if now.weekday() >= 5 or now.hour < 16:
-        raise RuntimeError(
-            "只允許台灣時間週一至週五 16:00 後執行"
-        )
-
-    today = now.date().isoformat()
+    today = eligible_market_day(now)
+    print(
+        f"DAILY_TARGET run_at={now.isoformat()} "
+        f"target={today}",
+        flush=True,
+    )
 
     batches = {}
     failures = []
