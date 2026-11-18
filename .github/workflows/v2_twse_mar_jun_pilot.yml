@@ -1,0 +1,43 @@
+name: V2 Phase 1 TWSE 2026 Mar-Jun Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Write missing quotes to Supabase? Run a dry-run first."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  verify-twse-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Verify official historical data
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WRITE: ${{ inputs.write }}
+        run: |
+          if [ "$WRITE" = "true" ]; then
+            test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
+            python twse_mar_jun_pilot.py --codes "2330,2317,2454,2303,2882" --write
+          else
+            python twse_mar_jun_pilot.py --codes "2330,2317,2454,2303,2882"
+          fi
