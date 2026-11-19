@@ -116,3 +116,11 @@ python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audi
 - GitHub Actions 只新增 \`V2 TPEx 7713 Guarded Repair Assessment\`（僅允許預演，沒有寫入選項）。因此合併此版本不會自動寫入資料庫；必須先釐清 10/27 成交資料差異、獲得使用者明確核准，再另行安全執行修復。
 - 收盤價獨立網站亦列示 10/27 為 72.0 元、1 張，但非交易所的網站不應用於取代正式金額欄位。任何未確認項目都繼續保留警示。
 
+
+## 2026-11-19：V2 TWSE 3～6 月自動排程可靠性修正
+
+- 觀察：V2 官方 2026-11-19 18:23 台灣時間預定批次，實際 18:32 UTC+8 啟動並於 18:33 完成，新增 415 筆／20 股票月份；20:23 預定批次在 20:58 查詢時沒有 V2 執行紀錄，不能推論是程式故障或永久漏掉，可能為 GitHub 排程延遲／遺失。
+- 另發現 V2 與 \`Automatic TWSE History Backfill\` 共用 \`market-history-backfill\` concurrency group。此共享可能造成佇列競爭（但不能證實當次漏跑的原因）。改為 \`v2-twse-mar-jun-recovery\`，只在 V2 自己的各次執行間互斥，\`cancel-in-progress: false\` 不變。
+- 在原有每 2 小時的 UTC \`23 */2 * * *\` 外，新增錯開半小時的 \`53 */2 * * *\`；台灣時間每個偶數小時 :23 與 :53 均有**獨立排程機會**。備援成功時也會繼續補下一批尚未完成月份，**不是成功後自動跳過的健康檢查**，因此最多可增加回補頻率與 API 呼叫量。
+- 每批仍限制最多 5 檔，原本的 \`TWSE_MAR_JUN_AUTO_ENABLED\` 排程寫入開關仍必要，且資料庫 \`INSERT ... ON CONFLICT DO NOTHING\` 不覆蓋既存價量、回補進度由既存筆數判斷。工作流程新增 \`TRIGGER, CRON, RUN_ID\` 日誌便於追蹤。
+- GitHub 官方文件明確警告 \`schedule\` 可延遲或遺失；**雙時段不能保證每次一定執行**。下一個真正建立的 GitHub run 和 Supabase 進度才是驗收依據；不得把程式碼合併等同於定時執行成功。
