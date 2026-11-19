@@ -1,0 +1,40 @@
+name: V2 Official Individual Gap Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_requests:
+        description: "Official stock/month groups to verify (no database writes)"
+        required: true
+        type: choice
+        default: "4"
+        options:
+          - "4"
+          - "6"
+          - "8"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-official-gap-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compare official historical quotes without writing
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+        run: |
+          test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
+          python official_gap_verify.py --lookback-days 120 --max-requests "$MAX_REQUESTS"

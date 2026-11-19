@@ -66,3 +66,14 @@ python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audi
 - 保守設計：**目前只支援核實的 2026 年**。若執行範圍跨到尚未核對的 2027 年，工作流程仍可檢查既有資料，但會明確報告 \`CALENDAR_UNVERIFIED\`，不猜測開盤日。
 - 未來新增 2027 年度表或臨時休市事件時需核實來源後更新；年度日曆不代表臨時颱風休市已全部自動同步。
 - 這項檢查**完全唯讀**；不更改每日行情更新、選股公式、回補排程或任何 Supabase 價格；個股停牌／零成交仍可能造成疑似缺日，待下一階段官方月歷史對照才能確認。
+
+
+## 第一階段補充：逐檔疑似缺漏的官方月行情核對（手動小批次）
+
+- 新增 \`official_gap_verify.py\`：只讀取 Supabase 近 120 天 TWSE/TPEX 行情與已核對 2026 年交易日，從「首末兩個已存交易日之間」挑選疑似缺日最多的上市、上櫃個股月份，每次最多 10 組（手動 workflow 預設 4 組）。
+- 上市與上櫃個股月份交替挑選，避免疑似缺漏較多的一個市場占滿全部名額。
+- 沿用現有 \`market_backfill.fetch_month / parse_month\`、\`tpex_backfill.get_month / parse_month\` 的官方月行情下載及日期檢查邏輯；每組股票月份查一次、間隔至少 2.5 秒，遇來源連線異常沿用既有重試。
+- 分成兩種結果：① \`confirmed_missing_quote_dates\`（官方月資料有有效收盤價，但本地沒有）；② \`unresolved_dates\`（官方資料沒有可解析的有效收盤價，**不能宣稱一定休市、零成交或停牌**）。下載或驗證失敗則列為 \`OFFICIAL_GAP_FAILED\`，整批全失敗會明確失敗。
+- GitHub Actions：\`V2 Official Individual Gap Verification\` **只支援手動觸發**；查看 \`OFFICIAL_GAP_SUMMARY\` 日誌或 Job Summary。沒有自動排程，不會大量打交易所 API。
+- 全流程 \`conn.read_only=True\`，**只讀資料庫、不 INSERT/UPDATE/DELETE、不修改回補標記、不替任何缺日填價格**；這個驗證報告的官方有效行情缺漏日期，仍需另行設計經核對後的安全修復流程。
+- 本次只是試點，無法全面核實 1,951 個疑似缺日，也無法證明未查到官方有效收盤價的日期真的沒有交易。
