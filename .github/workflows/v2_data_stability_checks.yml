@@ -1,0 +1,54 @@
+name: V2 Data Stability Checks
+
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - '.github/workflows/v2_data_stability_checks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'auto_backfill.py'
+      - 'market_backfill.py'
+      - 'twse_mar_jun_auto.py'
+      - 'twse_recovery_status.py'
+      - 'test_recovery_status.py'
+      - '.github/workflows/v2_data_stability_checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q test_screener.py test_recovery_status.py
+
+  recovery-status:
+    needs: tests
+    # PRs never get a database secret. This job is SELECT-only on main.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Report auto-recovery switch and read-only database coverage
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AUTO_ENABLED: ${{ vars.TWSE_MAR_JUN_AUTO_ENABLED == 'true' }}
+        run: |
+          test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
+          echo "TWSE_AUTO_ENABLED=$AUTO_ENABLED"
+          echo "自動回補開關（true 才啟用）：**$AUTO_ENABLED**" >> "$GITHUB_STEP_SUMMARY"
+          python twse_mar_jun_auto.py --status-only
