@@ -13,6 +13,8 @@ on:
       - 'twse_mar_jun_auto.py'
       - 'twse_recovery_status.py'
       - 'test_recovery_status.py'
+      - 'daily_gap_audit.py'
+      - 'test_daily_gap_audit.py'
       - '.github/workflows/v2_data_stability_checks.yml'
   workflow_dispatch:
 
@@ -29,7 +31,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q test_screener.py test_recovery_status.py
+      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py
 
   recovery-status:
     needs: tests

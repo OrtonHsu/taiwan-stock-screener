@@ -1,0 +1,160 @@
+"""Read-only audit of suspicious missing TWSE/TPEX trading-day quotes.
+
+A date is usable as a comparison day only when BOTH markets have a
+sufficiently broad snapshot. Missing individual quotes are *suspicions*,
+not proven bad data: halts and no-trade days require manual verification.
+This audit never downloads, repairs, or changes prices.
+"""
+
+import argparse
+from collections import defaultdict
+from datetime import datetime, timedelta
+import json
+import os
+from zoneinfo import ZoneInfo
+
+MARKETS = ("TWSE", "TPEX")
+MIN_RECORDS = {"TWSE": 900, "TPEX": 700}
+
+
+def audit_rows(rows, *, thresholds=None, max_examples=20):
+    """Audit (ISO date, market, stock code) rows without guessing holidays.
+
+    Only stocks present on the latest two-market complete date are checked.
+    For each stock, inspect the *interior* of its observed trading-day range;
+    this avoids assuming pre-listing or post-delisting quotes should exist.
+    """
+    thresholds = thresholds or MIN_RECORDS
+    by_date = defaultdict(lambda: {market: set() for market in MARKETS})
+    by_stock = defaultdict(set)
+    for day, market, code in rows:
+        if market not in MARKETS:
+            continue  # Ignore legacy 'TPEx' records, do not double count.
+        day, code = str(day), str(code)
+        by_date[day][market].add(code)
+        by_stock[(market, code)].add(day)
+
+    complete_dates = sorted(
+        day for day, markets in by_date.items()
+        if all(len(markets[m]) >= thresholds[m] for m in MARKETS)
+    )
+    if not complete_dates:
+        raise ValueError("找不到上市及上櫃同時達安全門檻的交易日；無法進行缺日稽核")
+
+    latest = complete_dates[-1]
+    complete_set = set(complete_dates)
+    partial = [
+        {"date": day, **{m: len(markets[m]) for m in MARKETS}}
+        for day, markets in by_date.items()
+        if not all(len(markets[m]) >= thresholds[m] for m in MARKETS)
+    ]
+    partial.sort(key=lambda x: x["date"], reverse=True)
+
+    stats = {}
+    suspected = []
+    for market in MARKETS:
+        current_codes = by_date[latest][market]
+        missing_stocks = 0
+        missing_rows = 0
+        for code in sorted(current_codes):
+            observed = by_stock[(market, code)] & complete_set
+            if len(observed) < 2:
+                continue
+            start, end = min(observed), max(observed)
+            gaps = [day for day in complete_dates
+                    if start < day < end and day not in observed]
+            if not gaps:
+                continue
+            missing_stocks += 1
+            missing_rows += len(gaps)
+            suspected.append({"market": market, "code": code,
+                              "missing_count": len(gaps),
+                              "sample_dates": gaps[:5]})
+        stats[market] = {
+            "latest_codes": len(current_codes),
+            "suspected_missing_stocks": missing_stocks,
+            "suspected_missing_quotes": missing_rows,
+        }
+
+    suspected.sort(key=lambda x: (-x["missing_count"], x["market"], x["code"]))
+    return {
+        "latest_complete_date": latest,
+        "complete_market_days": len(complete_dates),
+        "partial_market_days": len(partial),
+        "partial_day_samples": partial[:max_examples],
+        "market_stats": stats,
+        "suspected_stock_samples": suspected[:max_examples],
+        "suspected_stocks_total": len(suspected),
+    }
+
+
+def markdown_summary(report):
+    lines = [
+        "## V2 逐交易日缺漏稽核（唯讀）",
+        f"雙市場完整最新日期：**{report['latest_complete_date']}**；",
+        f"可比較交易日：**{report['complete_market_days']}**；"
+        f"資料未達雙市場門檻日期：**{report['partial_market_days']}**。",
+        "",
+        "| 市場 | 最新日股票數 | 疑似缺日股票 | 疑似缺少行情筆數 |",
+        "|---|---:|---:|---:|",
+    ]
+    for market, s in report["market_stats"].items():
+        lines.append(f"| {market} | {s['latest_codes']} | "
+                     f"{s['suspected_missing_stocks']} | {s['suspected_missing_quotes']} |")
+    lines.append("\n**注意：** 只比較資料庫中雙市場均達最低筆數的日期。"
+                 "個股無交易、停牌、上市／轉板及休市均需人工核對；"
+                 "兩個市場同時完全缺資料的日期，無法靠此方法發現；"
+                 "最新尚未完成的交易日也可能暫時顯示資料不完整。"
+                 "不會寫入或自動回補。")
+    if report["partial_day_samples"]:
+        lines.extend(["", "### 未達雙市場門檻的日期（樣本）"])
+        for day in report["partial_day_samples"]:
+            lines.append(f"- {day['date']}: TWSE {day['TWSE']} / TPEX {day['TPEX']}")
+    if report["suspected_stock_samples"]:
+        lines.extend(["", "### 個股疑似缺日（樣本）"])
+        for stock in report["suspected_stock_samples"]:
+            lines.append(f"- {stock['market']} {stock['code']}: "
+                         f"{stock['missing_count']} 日；例：{', '.join(stock['sample_dates'])}")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--lookback-days", type=int, default=120)
+    parser.add_argument("--max-examples", type=int, default=20)
+    args = parser.parse_args(argv)
+    if not 7 <= args.lookback_days <= 365:
+        parser.error("--lookback-days 必須介於 7 至 365")
+    if not 1 <= args.max_examples <= 100:
+        parser.error("--max-examples 必須介於 1 至 100")
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("缺少 DATABASE_URL")
+    import psycopg
+
+    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    begin = (today - timedelta(days=args.lookback_days)).isoformat()
+    # The query is read-only, including the Postgres transaction flag.
+    with psycopg.connect(db_url, connect_timeout=15) as conn:
+        conn.read_only = True
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT date, market, code
+                FROM public.prices
+                WHERE date >= %s AND date <= %s
+                  AND market IN ('TWSE', 'TPEX')
+            """, (begin, today.isoformat()))
+            rows = cur.fetchall()
+
+    report = audit_rows(rows, max_examples=args.max_examples)
+    report["lookback_since"] = begin
+    print("DAILY_GAP_AUDIT " + json.dumps(report, ensure_ascii=False, sort_keys=True), flush=True)
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as output:
+            output.write(markdown_summary(report))
+
+
+if __name__ == "__main__":
+    main()

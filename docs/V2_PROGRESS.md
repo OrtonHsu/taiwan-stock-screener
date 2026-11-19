@@ -39,3 +39,19 @@ python twse_mar_jun_auto.py --status-only
 ```
 
 第一個指令不使用網路或資料庫；第二個需要既有 `DATABASE_URL`，以唯讀交易查詢。
+
+
+## 第一階段補充：逐交易日缺漏稽核（唯讀）
+
+- 新增 `daily_gap_audit.py`：以 `TWSE`／`TPEX` 有足夠行情的**共同日期**作為比較基準，不將週末或未知休市日期直接認定為缺漏。
+- 只檢查最新完整交易日仍有行情的股票，且只尋找該股票**已出現的首末日期之間**的缺日；停牌、暫停交易、零成交與轉板仍可能產生疑似缺日，必須人工確認。
+- 列出市場不完整的日期，以及按缺日筆數排序的個股樣本；**不下載、不填價、不刪除、不寫入資料庫**。
+- 使用 `DATABASE_URL`、只讀 Postgres 交易；GitHub Actions 的 `V2 Daily Missing Date Audit` 支援手動稽核，並於台灣時間每個工作日 23:46 排程唯讀檢查。GitHub 排程可能延遲或漏觸發。
+- 指令：`python daily_gap_audit.py --lookback-days 120`；範圍限制 7～365 日。GitHub 執行紀錄 `DAILY_GAP_AUDIT` 及 Step Summary 有摘要。
+- **限制**：如果兩個市場在同一日期完全沒有資料，單靠資料庫不能知道該日是真正休市或整日遺漏；市場筆數門檻無法證明逐檔資料完整。這一版只做可疑缺日偵測，正式修補需先核對交易所日曆、停牌及官方歷史報表。
+
+離線測試：
+
+```bash
+python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py
+```

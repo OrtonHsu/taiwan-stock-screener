@@ -1,0 +1,32 @@
+name: V2 Daily Missing Date Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekdays at 23:46 Taiwan time, after the existing daily backup updates.
+    - cron: '46 15 * * 1-5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-daily-gap-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PostgreSQL driver
+        run: pip install 'psycopg[binary]>=3.1,<4'
+      - name: Read-only trading-day gap audit
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
+          python daily_gap_audit.py --lookback-days 120 --max-examples 20
