@@ -6,6 +6,7 @@ import pytest
 
 from official_gap_verify import (
     choose_batches, compare_official_month, compare_batches, markdown_report,
+    raw_official_dates, VerifiedOfficialMonth, fetch_verified_month,
 )
 
 
@@ -132,3 +133,139 @@ def test_request_bounds_and_no_complete_days_fail_closed():
         choose_batches(sample_rows(), DAYS, max_requests=11, thresholds=LIMITS)
     with pytest.raises(ValueError, match="安全門檻"):
         choose_batches([], DAYS, max_requests=2, thresholds=LIMITS)
+
+
+
+def test_original_tpex_table_dates_include_rows_without_close():
+    payload = {
+        "stat": "ok",
+        "tables": [{"fields": ["日 期", "成交張數", "成交仟元", "收盤"],
+                    "data": [
+                        ["115/11/16", "0", "0", "--"],
+                        ["115/11/17*", "5", "100", "35.1"],
+                    ]}],
+    }
+    assert raw_official_dates("TPEX", payload, "2026-11") == {
+        "2026-11-16", "2026-11-17"
+    }
+
+
+def test_original_twse_table_includes_no_price_date():
+    payload = {
+        "stat": "OK", "fields": ["日期", "收盤價"],
+        "data": [["115/11/16", "--"], ["115/11/17", "42.0"]],
+    }
+    assert raw_official_dates("TWSE", payload, "2026-11") == {
+        "2026-11-16", "2026-11-17"
+    }
+
+
+def test_exact_three_way_classification_of_suspected_dates():
+    batch = {
+        "market": "TPEX", "code": "6488", "month": "2026-11",
+        "suspected_dates": ["2026-11-16", "2026-11-17", "2026-11-18"],
+    }
+    rows = [
+        ("2026-11-16", "TPEX", "6488", "測試", 100.0, 1000, 100000),
+    ]
+    result = compare_official_month(
+        batch, rows, {"2026-11-16", "2026-11-17"}
+    )
+    assert result["confirmed_missing_quote_dates"] == ["2026-11-16"]
+    assert result["official_listed_no_valid_close_dates"] == ["2026-11-17"]
+    assert result["official_date_not_listed_dates"] == ["2026-11-18"]
+    assert result["unresolved_dates"] == ["2026-11-17", "2026-11-18"]
+
+
+def test_no_raw_table_does_not_falsely_classify_no_price_dates():
+    batch = {
+        "market": "TWSE", "code": "2321", "month": "2026-11",
+        "suspected_dates": ["2026-11-16"],
+    }
+    result = compare_official_month(batch, [])
+    assert result["unresolved_dates"] == ["2026-11-16"]
+    assert result["official_listed_no_valid_close_dates"] == []
+    assert result["official_date_not_listed_dates"] == []
+
+
+def test_valid_parsed_date_must_also_exist_in_original_table():
+    batch = {"market": "TWSE", "code": "1102", "month": "2026-11",
+             "suspected_dates": ["2026-11-16"]}
+    row = ("2026-11-16", "TWSE", "1102", "測試", 100, 1000, 1000)
+    with pytest.raises(ValueError, match="原始表格"):
+        compare_official_month(batch, [row], {"2026-11-17"})
+
+
+def test_original_table_rejects_duplicate_wrong_month_and_bad_fields():
+    duplicate = {
+        "stat": "OK", "fields": ["日期", "收盤價"],
+        "data": [["115/11/16", "25"], ["115/11/16", "--"]],
+    }
+    with pytest.raises(ValueError, match="重複"):
+        raw_official_dates("TWSE", duplicate, "2026-11")
+    with pytest.raises(ValueError, match="日期不屬於"):
+        raw_official_dates(
+            "TWSE",
+            {"stat": "OK", "fields": ["日期"], "data": [["115/10/16"]]},
+            "2026-11",
+        )
+    with pytest.raises(ValueError, match="日期欄位"):
+        raw_official_dates("TWSE", {"stat": "OK", "fields": [],
+                                    "data": []}, "2026-11")
+
+
+def test_live_fetch_wrapper_returns_dates_from_same_official_payload(monkeypatch):
+    import official_gap_verify as mod
+
+    payload = {
+        "stat": "OK",
+        "fields": ["日期", "成交股數", "成交金額", "收盤價"],
+        "data": [
+            ["115/11/16", "0", "0", "--"],
+            ["115/11/17", "1,000", "10,000", "10"],
+        ],
+    }
+    calls = []
+    def fake_fetch(session, code, month):
+        calls.append((code, month))
+        return payload
+    monkeypatch.setattr(mod, "get_twse_month", fake_fetch)
+    result = fetch_verified_month(None, "TWSE", "1102", date(2026, 11, 1))
+    assert isinstance(result, VerifiedOfficialMonth)
+    assert len(result.valid_rows) == 1
+    assert result.raw_dates == {"2026-11-16", "2026-11-17"}
+    assert calls == [("1102", date(2026, 11, 1))]
+
+
+def test_report_contains_both_new_uncertainty_categories():
+    batch = {
+        "market": "TPEX", "code": "6488", "month": "2026-11",
+        "suspected_dates": ["2026-11-16", "2026-11-17"],
+    }
+
+    def mock_fetch(*args):
+        return VerifiedOfficialMonth(
+            [], {"2026-11-16"}
+        )
+
+    results, errors = compare_batches([batch], mock_fetch)
+    assert errors == []
+    assert results[0]["official_listed_no_valid_close_dates"] == [
+        "2026-11-16"
+    ]
+    assert results[0]["official_date_not_listed_dates"] == [
+        "2026-11-17"
+    ]
+    report = {
+        "latest_complete_date": "2026-11-18",
+        "checked_groups": 1, "failed_groups": 0,
+        "confirmed_missing_quotes": 0, "unresolved_quotes": 2,
+        "official_listed_no_valid_close": 1, "official_date_not_listed": 1,
+        "results": results, "errors": [],
+    }
+    markdown = markdown_report(report)
+    assert "官方有列日期但無有效收盤價" in markdown
+    assert "官方未列日期" in markdown
+    assert "2026-11-16" in markdown
+    assert "2026-11-17" in markdown
+    assert "不修改 Supabase" in markdown
