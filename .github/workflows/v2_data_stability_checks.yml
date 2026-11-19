@@ -17,6 +17,8 @@ on:
       - 'tw_market_calendar.py'
       - 'official_gap_verify.py'
       - 'test_official_gap_verify.py'
+      - 'tpex_7713_safe_preview.py'
+      - 'test_tpex_7713_safe_preview.py'
       - 'test_daily_gap_audit.py'
       - '.github/workflows/v2_data_stability_checks.yml'
   workflow_dispatch:
@@ -34,7 +36,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py
+      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py
 
   recovery-status:
     needs: tests
