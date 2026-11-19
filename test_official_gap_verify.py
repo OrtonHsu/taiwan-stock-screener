@@ -269,3 +269,39 @@ def test_report_contains_both_new_uncertainty_categories():
     assert "2026-11-16" in markdown
     assert "2026-11-17" in markdown
     assert "不修改 Supabase" in markdown
+
+
+
+def test_batch_offset_moves_to_new_group_without_duplicate_requests():
+    first_latest, first = choose_batches(
+        sample_rows(), DAYS, max_requests=1, batch_offset=0, thresholds=LIMITS
+    )
+    next_latest, next_batch = choose_batches(
+        sample_rows(), DAYS, max_requests=1, batch_offset=1, thresholds=LIMITS
+    )
+    assert first_latest == next_latest == "2026-11-18"
+    assert [(x["market"], x["code"]) for x in first] == [("TPEX", "6488")]
+    assert [(x["market"], x["code"]) for x in next_batch] == [("TWSE", "1102")]
+    assert not ({(x["market"], x["code"]) for x in first} &
+                {(x["market"], x["code"]) for x in next_batch})
+
+
+def test_batch_offset_past_end_yields_empty_and_negative_rejected():
+    _, empty = choose_batches(
+        sample_rows(), DAYS, max_requests=4, batch_offset=2, thresholds=LIMITS
+    )
+    assert empty == []
+    with pytest.raises(ValueError, match="batch_offset"):
+        choose_batches(sample_rows(), DAYS, batch_offset=-1, thresholds=LIMITS)
+    with pytest.raises(ValueError, match="batch_offset"):
+        choose_batches(sample_rows(), DAYS, batch_offset=1001, thresholds=LIMITS)
+
+
+def test_batch_offset_is_visible_in_report():
+    report = {
+        "latest_complete_date": "2026-11-18", "batch_offset": 4,
+        "checked_groups": 0, "failed_groups": 0,
+        "confirmed_missing_quotes": 0, "unresolved_quotes": 0,
+        "results": [], "errors": [],
+    }
+    assert "批次起點（略過前幾組）：**4**" in markdown_report(report)
