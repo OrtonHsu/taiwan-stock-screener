@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 import json
 import os
 import time
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -22,6 +23,7 @@ from market_backfill import fetch_month as get_twse_month
 from market_backfill import parse_month as parse_twse_month
 from tpex_backfill import get_month as get_tpex_month
 from tpex_backfill import parse_month as parse_tpex_month
+from tpex_backfill import parse_roc_date
 from tw_market_calendar import expected_market_dates, latest_due_market_date
 
 
@@ -86,7 +88,61 @@ def choose_batches(rows, official_dates, *, max_requests=6, thresholds=None):
     return latest, selected
 
 
-def compare_official_month(batch, official_rows):
+class VerifiedOfficialMonth(NamedTuple):
+    """Both validated quotes and unfiltered official table dates."""
+
+    valid_rows: list
+    raw_dates: set
+
+
+def raw_official_dates(market, payload, expected_month):
+    """Get *all* source dates, including lines with no valid close.
+
+    Call the existing strict official parser first. This function only
+    describes whether a date is present in its original table; a listed
+    but invalid close does NOT establish that there was no trading.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("官方來源不是 JSON 物件")
+    if market == "TWSE":
+        if payload.get("stat") != "OK":
+            raise ValueError("上市官方來源狀態不為 OK")
+        fields = payload.get("fields")
+        records = payload.get("data")
+        date_field = "日期"
+    elif market == "TPEX":
+        if str(payload.get("stat", "")).lower() != "ok":
+            raise ValueError("上櫃官方來源狀態不為 OK")
+        tables = payload.get("tables")
+        if not isinstance(tables, list):
+            raise ValueError("上櫃官方表格格式異常")
+        if not tables:
+            return set()
+        table = tables[0]
+        if not isinstance(table, dict):
+            raise ValueError("上櫃官方表格內容異常")
+        fields = table.get("fields")
+        records = table.get("data")
+        date_field = "日 期"
+    else:
+        raise ValueError(f"不支援市場：{market}")
+    if not isinstance(fields, list) or date_field not in fields:
+        raise ValueError("官方日期欄位異常")
+    if not isinstance(records, list):
+        raise ValueError("官方每日資料格式異常")
+    index = fields.index(date_field)
+    seen = set()
+    for row in records:
+        if not isinstance(row, (list, tuple)) or len(row) <= index:
+            raise ValueError("官方原始日期列格式異常")
+        day = parse_roc_date(row[index], expected_month).isoformat()
+        if day in seen:
+            raise ValueError(f"官方原始日期重複：{day}")
+        seen.add(day)
+    return seen
+
+
+def compare_official_month(batch, official_rows, raw_reported_dates=None):
     """Classify only dates that the parser returned with *valid* close."""
     market, code, month = batch["market"], batch["code"], batch["month"]
     valid_dates = set()
@@ -100,6 +156,17 @@ def compare_official_month(batch, official_rows):
             raise ValueError(f"官方資料重複日期：{day}")
         valid_dates.add(day)
     suspected = set(batch["suspected_dates"])
+    unverified = suspected - valid_dates
+    # Without the unfiltered official table, we cannot distinguish
+    # "date listed without a valid close" from "date absent".
+    no_valid_close = []
+    not_listed = []
+    if raw_reported_dates is not None:
+        raw_dates = set(raw_reported_dates)
+        if not valid_dates.issubset(raw_dates):
+            raise ValueError("解析後的有效收盤價日期未出現在官方原始表格")
+        no_valid_close = sorted(unverified & raw_dates)
+        not_listed = sorted(unverified - raw_dates)
     return {
         "market": market,
         "code": code,
@@ -109,7 +176,9 @@ def compare_official_month(batch, official_rows):
         "confirmed_missing_quote_dates": sorted(suspected & valid_dates),
         # A missing valid close may mean zero trading, suspension or no listing.
         # Do not present it as verified "no trade" without an explicit source.
-        "unresolved_dates": sorted(suspected - valid_dates),
+        "unresolved_dates": sorted(unverified),
+        "official_listed_no_valid_close_dates": no_valid_close,
+        "official_date_not_listed_dates": not_listed,
     }
 
 
@@ -125,14 +194,23 @@ def compare_batches(batches, fetcher, *, delay_seconds=2.5):
                 batch["market"], batch["code"], batch["month"]
             )
             try:
-                rows = fetcher(session, market, code, date.fromisoformat(month + "-01"))
-                result = compare_official_month(batch, rows)
+                fetched = fetcher(session, market, code, date.fromisoformat(month + "-01"))
+                if isinstance(fetched, VerifiedOfficialMonth):
+                    result = compare_official_month(
+                        batch, fetched.valid_rows, fetched.raw_dates
+                    )
+                else:
+                    # Legacy test/client without unfiltered rows: leave
+                    # all no-price dates unresolved, not falsely classified.
+                    result = compare_official_month(batch, fetched)
                 results.append(result)
                 print(
                     f"OFFICIAL_GAP_CHECK {market} {code} {month} "
                     f"suspected={result['suspected_count']} "
                     f"confirmed={len(result['confirmed_missing_quote_dates'])} "
-                    f"unresolved={len(result['unresolved_dates'])}",
+                    f"unresolved={len(result['unresolved_dates'])} "
+                    f"raw_no_close={len(result['official_listed_no_valid_close_dates'])} "
+                    f"raw_absent={len(result['official_date_not_listed_dates'])}",
                     flush=True,
                 )
             except Exception as exc:
@@ -148,13 +226,13 @@ def fetch_verified_month(session, market, code, first_day):
     """Reuse the existing, date-checking monthly exchange parsers."""
     month = first_day.strftime("%Y-%m")
     if market == "TWSE":
-        return parse_twse_month(
-            get_twse_month(session, code, first_day), code, month
-        )
+        payload = get_twse_month(session, code, first_day)
+        rows = parse_twse_month(payload, code, month)
+        return VerifiedOfficialMonth(rows, raw_official_dates(market, payload, month))
     if market == "TPEX":
-        return parse_tpex_month(
-            get_tpex_month(session, code, first_day), code, month
-        )
+        payload = get_tpex_month(session, code, first_day)
+        rows = parse_tpex_month(payload, code, month)
+        return VerifiedOfficialMonth(rows, raw_official_dates(market, payload, month))
     raise ValueError(f"不支援市場：{market}")
 
 
@@ -168,6 +246,9 @@ def markdown_report(report):
         f"**{report['confirmed_missing_quotes']} 筆**。",
         f"官方未提供可解析有效收盤價、尚不能確認："
         f"**{report['unresolved_quotes']} 筆**。",
+        f"其中官方有列日期但無有效收盤價："
+        f"**{report.get('official_listed_no_valid_close', 0)} 筆**；"
+        f"官方未列日期：**{report.get('official_date_not_listed', 0)} 筆**。",
         "",
         "**這不是補檔工作。** 有效收盤價確認也不代表資料可直接覆寫；"
         "只產生待修復清單，不修改 Supabase，不寫入進度標記。",
@@ -181,6 +262,16 @@ def markdown_report(report):
         if r["confirmed_missing_quote_dates"]:
             lines.append(
                 "  - 候選日期：" + ", ".join(r["confirmed_missing_quote_dates"][:15])
+            )
+        if r.get("official_listed_no_valid_close_dates"):
+            lines.append(
+                "  - 官方列出但沒有有效收盤價：" +
+                ", ".join(r["official_listed_no_valid_close_dates"][:15])
+            )
+        if r.get("official_date_not_listed_dates"):
+            lines.append(
+                "  - 官方原始表格未列日期：" +
+                ", ".join(r["official_date_not_listed_dates"][:15])
             )
     for error in report["errors"][:10]:
         lines.append("- 核對失敗：" + error)
@@ -235,6 +326,12 @@ def main(argv=None):
             len(x["confirmed_missing_quote_dates"]) for x in results
         ),
         "unresolved_quotes": sum(len(x["unresolved_dates"]) for x in results),
+        "official_listed_no_valid_close": sum(
+            len(x["official_listed_no_valid_close_dates"]) for x in results
+        ),
+        "official_date_not_listed": sum(
+            len(x["official_date_not_listed_dates"]) for x in results
+        ),
         "results": results,
         "errors": errors,
         "mode": "READ_ONLY",
