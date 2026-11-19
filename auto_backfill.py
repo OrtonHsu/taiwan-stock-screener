@@ -11,11 +11,12 @@ from datetime import date
 import psycopg
 
 from stock_list import get_twse_stock_codes
+from market_backfill import taiwan_today, verified_before_listing
 
 
 def get_completed_codes(conn, months):
     """Find codes with completed progress for all past months."""
-    today = date.today()
+    today = taiwan_today()
     year, month = today.year, today.month
     target_months = []
 
@@ -37,16 +38,29 @@ def get_completed_codes(conn, months):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT code
-            FROM backfill_progress
-            WHERE market = 'TWSE'
-              AND month = ANY(%s)
-            GROUP BY code
-            HAVING COUNT(DISTINCT month) = %s
+            SELECT b.code, b.month, b.row_count, COALESCE(p.n, 0)
+            FROM public.backfill_progress b
+            LEFT JOIN (
+                SELECT code, LEFT(date,7) AS month, COUNT(*) AS n
+                FROM public.prices
+                WHERE market='TWSE' AND LEFT(date,7) = ANY(%s)
+                GROUP BY code, LEFT(date,7)
+            ) p ON p.code=b.code AND p.month=b.month
+            WHERE b.market = 'TWSE' AND b.month = ANY(%s)
             """,
-            (target_months, len(target_months)),
+            (target_months, target_months),
         )
-        return {row[0] for row in cur.fetchall()}
+        covered = {}
+        for code, key, expected, actual in cur.fetchall():
+            valid = (
+                expected > 0 and actual >= expected
+            ) or (
+                expected == 0
+                and verified_before_listing(code, date.fromisoformat(key + "-01"))
+            )
+            if valid:
+                covered.setdefault(code, set()).add(key)
+        return {code for code, keys in covered.items() if set(target_months) <= keys}
 
 
 def main():
@@ -101,3 +115,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

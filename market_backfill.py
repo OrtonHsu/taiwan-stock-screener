@@ -24,13 +24,33 @@ HEADERS = {
 # Verified first TWSE trading dates.
 # Months before these dates have no TWSE listing history.
 # Add further entries only after official verification.
+# Source (checked 2026-11-19):
+# https://www.twse.com.tw/en/company/newlisting?response=html
 FIRST_TWSE_TRADING_DATE = {
+    "2072": date(2026, 3, 26),
     "2237": date(2026, 8, 10),
     "6467": date(2026, 10, 20),
     "7812": date(2026, 9, 22),
     "7855": date(2026, 8, 11),
     "8908": date(2026, 10, 16),
     "7710": date(2026, 10, 27),
+    "7867": date(2026, 10, 30),
+    "7689": date(2026, 7, 28),
+    "7835": date(2026, 7, 24),
+    "6947": date(2026, 7, 23),
+    "5236": date(2026, 7, 16),
+    "7827": date(2026, 5, 29),
+    "4582": date(2026, 5, 22),
+    "7803": date(2026, 5, 20),
+    "7818": date(2026, 5, 18),
+    "4195": date(2026, 5, 11),
+    "7768": date(2026, 5, 7),
+    "4178": date(2026, 4, 30),
+    "7760": date(2026, 4, 28),
+    "7821": date(2026, 4, 20),
+    "4169": date(2026, 4, 8),
+    "7822": date(2026, 3, 30),
+    "6908": date(2026, 3, 25),
 }
 
 MAX_RETRIES = 3
@@ -162,14 +182,27 @@ def is_completed(conn, code, month):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT 1 FROM backfill_progress
+            SELECT row_count FROM backfill_progress
             WHERE market = 'TWSE'
               AND code = %s
               AND month = %s
             """,
             (code, month),
         )
-        return cur.fetchone() is not None
+        row = cur.fetchone()
+        if row is None:
+            return False
+        expected = int(row[0])
+        if expected == 0:
+            return verified_before_listing(code, date.fromisoformat(month + "-01"))
+        if expected < 0:
+            return False
+        cur.execute(
+            """SELECT COUNT(*) FROM public.prices
+               WHERE market='TWSE' AND code=%s AND LEFT(date,7)=%s""",
+            (code, month),
+        )
+        return int(cur.fetchone()[0]) >= expected
 
 
 def mark_completed(conn, code, month, row_count):
@@ -446,3 +479,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
