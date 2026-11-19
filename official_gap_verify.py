@@ -27,7 +27,7 @@ from tpex_backfill import parse_roc_date
 from tw_market_calendar import expected_market_dates, latest_due_market_date
 
 
-def choose_batches(rows, official_dates, *, max_requests=6, thresholds=None):
+def choose_batches(rows, official_dates, *, max_requests=6, batch_offset=0, thresholds=None):
     """Prioritize up to N code/month groups, fairly alternating markets.
 
     A day is a comparison day only if both markets reach coverage thresholds.
@@ -36,6 +36,8 @@ def choose_batches(rows, official_dates, *, max_requests=6, thresholds=None):
     """
     if not 1 <= max_requests <= 10:
         raise ValueError("max_requests 必須介於 1 與 10")
+    if not 0 <= batch_offset <= 1000:
+        raise ValueError("batch_offset 必須介於 0 與 1000")
     thresholds = thresholds or MIN_RECORDS
     official_set = set(official_dates)
     by_date = defaultdict(lambda: {m: set() for m in MARKETS})
@@ -81,11 +83,12 @@ def choose_batches(rows, official_dates, *, max_requests=6, thresholds=None):
     selected = []
     # Every run should investigate both listed and OTC data if available,
     # instead of using up the batch on higher-volume OTC gaps alone.
-    while len(selected) < max_requests and any(queues.values()):
+    limit = batch_offset + max_requests
+    while len(selected) < limit and any(queues.values()):
         for market in ("TPEX", "TWSE"):
-            if queues[market] and len(selected) < max_requests:
+            if queues[market] and len(selected) < limit:
                 selected.append(queues[market].pop(0))
-    return latest, selected
+    return latest, selected[batch_offset:]
 
 
 class VerifiedOfficialMonth(NamedTuple):
@@ -240,6 +243,7 @@ def markdown_report(report):
     lines = [
         "## V2 官方月行情疑似缺漏核對（手動、唯讀）",
         f"最新完整行情日：**{report['latest_complete_date']}**；"
+        f"批次起點（略過前幾組）：**{report.get('batch_offset', 0)}**；"
         f"本次檢查月份數：**{report['checked_groups']}**；"
         f"官方下載失敗：**{report['failed_groups']}**。",
         f"已比對出有官方有效收盤價、但資料庫無紀錄："
@@ -282,11 +286,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lookback-days", type=int, default=120)
     parser.add_argument("--max-requests", type=int, default=6)
+    parser.add_argument("--batch-offset", type=int, default=0)
     args = parser.parse_args(argv)
     if not 14 <= args.lookback_days <= 180:
         parser.error("--lookback-days 必須介於 14 與 180")
     if not 1 <= args.max_requests <= 10:
         parser.error("--max-requests 必須介於 1 與 10")
+    if not 0 <= args.batch_offset <= 1000:
+        parser.error("--batch-offset 必須介於 0 與 1000")
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError("缺少 DATABASE_URL")
@@ -308,10 +315,12 @@ def main(argv=None):
             stored_rows = cur.fetchall()
 
     latest, batches = choose_batches(
-        stored_rows, official_dates, max_requests=args.max_requests
+        stored_rows, official_dates, max_requests=args.max_requests,
+        batch_offset=args.batch_offset,
     )
     print("OFFICIAL_GAP_SELECTION " + json.dumps({
         "latest_complete_date": latest,
+        "batch_offset": args.batch_offset,
         "selected": [{k: (len(v) if k == "suspected_dates" else v)
                       for k, v in b.items()} for b in batches],
         "mode": "READ_ONLY",
@@ -320,6 +329,7 @@ def main(argv=None):
     results, errors = compare_batches(batches, fetch_verified_month)
     report = {
         "latest_complete_date": latest,
+        "batch_offset": args.batch_offset,
         "checked_groups": len(results),
         "failed_groups": len(errors),
         "confirmed_missing_quotes": sum(
