@@ -1,0 +1,43 @@
+name: V2 TWSE Mar-Jun Next Batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Write audited quotes? Keep false for first run."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  audit-next-twse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Select and audit missing TWSE historical months
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WRITE: ${{ inputs.write }}
+        run: |
+          test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
+          if [ "$WRITE" = "true" ]; then
+            python twse_mar_jun_next_batch.py --batch-size 5 --write
+          else
+            python twse_mar_jun_next_batch.py --batch-size 5
+          fi
