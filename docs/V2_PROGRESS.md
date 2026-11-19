@@ -77,3 +77,12 @@ python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audi
 - GitHub Actions：\`V2 Official Individual Gap Verification\` **只支援手動觸發**；查看 \`OFFICIAL_GAP_SUMMARY\` 日誌或 Job Summary。沒有自動排程，不會大量打交易所 API。
 - 全流程 \`conn.read_only=True\`，**只讀資料庫、不 INSERT/UPDATE/DELETE、不修改回補標記、不替任何缺日填價格**；這個驗證報告的官方有效行情缺漏日期，仍需另行設計經核對後的安全修復流程。
 - 本次只是試點，無法全面核實 1,951 個疑似缺日，也無法證明未查到官方有效收盤價的日期真的沒有交易。
+
+
+## 第一階段補充：官方原始月表日期分類
+
+- 個股官方月行情比對已由兩類改為三類：① 官方有有效收盤價但資料庫缺少（\`confirmed_missing_quote_dates\`）；② 官方原始報表**列有日期但無有效收盤價**（\`official_listed_no_valid_close_dates\`）；③ **官方原始報表未列出該日期**（\`official_date_not_listed_dates\`）。
+- 第②與第③種仍都計入 \`unresolved_dates\`，**不能**直接推斷為零成交、停牌、休市、下市或可以填入前日收盤價。
+- 同一筆 TWSE／TPEX 官方下載結果先經原有 \`parse_month\` 驗證，再讀取不過濾日期的原始表格；若原始日期重複、月份不符、欄位異常，視為來源失敗，不產生誤導性的分類。
+- 手動工作流程 \`V2 Official Individual Gap Verification\` 維持每批 4／6／8 組、完全唯讀、不啟用自動回補。執行後請看 \`OFFICIAL_GAP_SUMMARY\` 中的兩項新統計。
+- 先用少量官方比對確認兩種未解原因的比例，再決定是否要建立人工複核標記或經證實才可使用的修復流程。
