@@ -57,6 +57,30 @@ def matches_official(stored, official):
     return True
 
 
+def suspicious_amounts(official_rows):
+    """Flag extreme average-price mismatch; do not infer a replacement price.
+
+    In ordinary stock trades the daily weighted average should not diverge
+    drastically from the last close. This conservative heuristic only
+    requests manual review; it never corrects the official source itself.
+    """
+    warnings = []
+    for row in check_official_rows(official_rows).values():
+        day, _, _, _, close, volume, amount = row
+        if float(volume) > 0:
+            implied_avg = float(amount) / float(volume)
+            deviation = abs(implied_avg / float(close) - 1)
+            if deviation > 0.10:
+                warnings.append({
+                    "date": str(day),
+                    "close": float(close),
+                    "implied_avg": round(implied_avg, 4),
+                    "deviation_pct": round(deviation * 100, 2),
+                    "reason": "成交金額／成交股數與收盤價差異大，需核對來源",
+                })
+    return warnings
+
+
 def assess_existing(official_rows, stored_rows):
     """Return candidate insert tuples, refusing conflicting historical data."""
     verified = check_official_rows(official_rows)
@@ -84,11 +108,19 @@ def run_transaction(conn, official_rows, *, write=False):
         )
         current = cur.fetchall()
         to_insert, before = assess_existing(official_rows, current)
+        warnings = suspicious_amounts(official_rows)
         if not write:
             return {
                 "mode": "DRY_RUN", "before": before,
                 "candidate_inserts": len(to_insert), "inserted": 0,
+                "review_warnings": warnings,
+                "ready_for_insert": not warnings and before["ready_for_manual_review"],
             }
+        if warnings:
+            raise RuntimeError(
+                "官方成交金額／成交股數存在需人工核對的異常；"
+                "本程式禁止寫入，請先確認官方資料與單位"
+            )
 
         for row in to_insert:
             cur.execute(INSERT_SQL, row)
@@ -104,6 +136,8 @@ def run_transaction(conn, official_rows, *, write=False):
         return {
             "mode": "WRITE", "before": before, "after": after,
             "candidate_inserts": len(to_insert), "inserted": len(to_insert),
+            "review_warnings": [],
+            "ready_for_insert": True,
         }
 
 
@@ -138,6 +172,14 @@ def main(argv=None):
             f.write(f"模式：**{outcome['mode']}**；"
                     f"新增：**{outcome['inserted']}**；"
                     f"候選：**{outcome['candidate_inserts']}**。\n\n")
+            if outcome.get("review_warnings"):
+                f.write("\n**資料合理性待核對，不允許寫入：**\n")
+                for warning in outcome["review_warnings"]:
+                    f.write(
+                        f"- {warning['date']}：成交金額／股數推算平均價 "
+                        f"{warning['implied_avg']}，官方收盤價 {warning['close']}，"
+                        f"差距 {warning['deviation_pct']}%\n"
+                    )
             f.write(markdown_report(outcome.get("after", outcome["before"])))
 
 
