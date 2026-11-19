@@ -1,0 +1,47 @@
+name: V2 TWSE Mar-Jun Auto Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Write missing quotes (test false first)?"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  schedule:
+    - cron: '23 */2 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.event_name != 'schedule' || vars.TWSE_MAR_JUN_AUTO_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Audit and optionally repair 2026 March-June TWSE
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WRITE: ${{ github.event_name == 'schedule' && 'true' || inputs.write }}
+        run: |
+          test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL" && exit 1)
+          python -m py_compile twse_mar_jun_auto.py
+          if [ "$WRITE" = "true" ]; then
+            python twse_mar_jun_auto.py --batch-size 5 --write
+          else
+            python twse_mar_jun_auto.py --batch-size 5
+          fi
