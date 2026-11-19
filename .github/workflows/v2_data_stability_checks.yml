@@ -14,6 +14,7 @@ on:
       - 'twse_recovery_status.py'
       - 'test_recovery_status.py'
       - 'daily_gap_audit.py'
+      - 'tw_market_calendar.py'
       - 'test_daily_gap_audit.py'
       - '.github/workflows/v2_data_stability_checks.yml'
   workflow_dispatch:
