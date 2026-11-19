@@ -12,6 +12,21 @@ on:
           - "4"
           - "6"
           - "8"
+      batch_offset:
+        description: "Skip this many priority stock/month groups (0 for first batch, 4 for next)"
+        required: true
+        type: choice
+        default: "0"
+        options:
+          - "0"
+          - "4"
+          - "8"
+          - "12"
+          - "16"
+          - "20"
+          - "24"
+          - "28"
+          - "32"
 
 permissions:
   contents: read
@@ -35,6 +50,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MAX_REQUESTS: ${{ inputs.max_requests }}
+          BATCH_OFFSET: ${{ inputs.batch_offset }}
         run: |
           test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
-          python official_gap_verify.py --lookback-days 120 --max-requests "$MAX_REQUESTS"
+          python official_gap_verify.py --lookback-days 120 --max-requests "$MAX_REQUESTS" --batch-offset "$BATCH_OFFSET"
