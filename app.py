@@ -12,6 +12,7 @@ from v15_strategy import rank_v15
 from ma_convergence import scan_ma_dual
 from entry_timing import evaluate_entry_timing
 from trend_following import plan_trend_entries
+from v22_signal_validation import evaluate_recorded_signals, summarize_matured, PROSPECTIVE_FROM
 from storage import Store
 from industry_heat import get_industries, calculate_industry_heat
 
@@ -64,6 +65,29 @@ def load_paper_positions(db_url: str) -> pd.DataFrame:
                 ("v2.1.0",),
             )
             return pd.DataFrame(cur.fetchall(), columns=columns)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_v22_signal_sources(db_url: str) -> pd.DataFrame:
+    """Read only the originally recorded V2.1 signal/entry references."""
+    import psycopg
+    cols = [
+        "market", "code", "name", "setup", "signal_date", "signal_close",
+        "invalidation_reference", "entry_date", "entry_close",
+    ]
+    with psycopg.connect(db_url, connect_timeout=15) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT market,code,name,setup,signal_date,signal_close,
+                          invalidation_reference,entry_date,entry_close
+                   FROM stock_research.simulation_positions
+                   WHERE strategy_version=%s
+                   ORDER BY signal_date,market,code
+                   LIMIT 5000""",
+                ("v2.1.0",),
+            )
+            return pd.DataFrame(cur.fetchall(), columns=cols)
+
 
 try:
     database_url = os.getenv("DATABASE_URL", "")
@@ -591,6 +615,101 @@ with tab_timing:
             "全程無券商連線或自動下單；使用次日收盤價作為模擬成交代理，"
             "已計入預設手續費與證交稅，但不含滑價、最低手續費及除權息還原。"
         )
+
+
+    with st.expander("🔬 V2.2 隔日確認與 3／5／10／20 日驗證", expanded=False):
+        st.caption(
+            "這是唯讀、固定規則的研究實驗。V2.1 原始持倉與進出場不變；"
+            "隔日收盤只用來判斷是否通過，通過後再下一個完整交易日"
+            "才使用收盤價作為 V2.2 代理進場價。"
+        )
+        try:
+            sources = load_v22_signal_sources(database_url)
+            signals, horizons = evaluate_recorded_signals(
+                sources, recognized, valid_days, asof=latest,
+            )
+        except Exception:
+            # Keep the stock screener functional if a research query fails.
+            st.info("V2.2 研究資料暫時無法計算，原本選股與 V2.1 追蹤不受影響。")
+            signals, horizons = pd.DataFrame(), pd.DataFrame()
+
+        if signals.empty:
+            st.info("目前還沒有可評估的原始模擬訊號。")
+        else:
+            sample = signals[signals["cohort"] == "前瞻樣本"].copy()
+            a, b, c = st.columns(3)
+            a.metric("新規則前瞻訊號", len(sample))
+            b.metric("隔日確認通過", int(sample.check_status.isin([
+                "通過", "等待T+2", "T+2缺價"
+            ]).sum()) if not sample.empty else 0)
+            c.metric("隔日確認未通過", int(
+                (sample.check_status == "未通過").sum()
+            ) if not sample.empty else 0)
+            st.caption(
+                f"V2.2 前瞻評估從 {PROSPECTIVE_FROM} 之後的原始訊號開始。"
+                "此前訊號只作診斷示例，不納入新規則績效。"
+            )
+
+            recent = signals.sort_values("signal_date", ascending=False).head(25).copy()
+            recent["研究規則"] = recent["cohort"]
+            st.dataframe(
+                recent[[
+                    "code", "name", "setup", "signal_date", "研究規則",
+                    "t1_close", "reference", "check_status",
+                    "v22_entry_close",
+                ]].rename(columns={
+                    "code": "代號", "name": "名稱", "setup": "原始型態",
+                    "signal_date": "訊號日", "t1_close": "隔日收盤",
+                    "reference": "型態參考價", "check_status": "隔日驗證",
+                    "v22_entry_close": "確認後再隔日代理進場",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+            st.write("**固定持有期績效研究：3／5／10／20 個交易日**")
+            summary = summarize_matured(horizons)
+            if summary.empty:
+                st.info("目前尚無到期的前瞻樣本，將隨後續完整行情自然累積；不產生虛構勝率。")
+            else:
+                shown = summary.copy()
+                low_n = shown["已到期樣本"] < 30
+                shown.loc[low_n, "獲利比例%"] = float("nan")
+                st.dataframe(shown, use_container_width=True, hide_index=True)
+                st.caption(
+                    "樣本不足30筆時暫不顯示獲利比例；所有報酬"
+                    "均為收盤代理價格、扣除預設手續費與證交稅後估算。"
+                    "兩種策略的進場日期可能不同，不能直接視為因果績效。"
+                )
+            if not horizons.empty:
+                states = horizons.groupby(["strategy", "horizon", "status"]).size()
+                with st.expander("查看全部追蹤樣本與資料完整性", expanded=False):
+                    st.dataframe(
+                        horizons.sort_values(
+                            ["signal_date", "strategy", "horizon"],
+                            ascending=[False, True, True],
+                        ).rename(columns={
+                            "market": "市場", "code": "代號", "name": "名稱",
+                            "signal_date": "訊號日", "cohort": "樣本類別",
+                            "strategy": "代理進場方式",
+                            "entry_date": "進場日期", "entry_close": "進場代理價",
+                            "horizon": "持有交易日", "evaluation_date": "到期日",
+                            "status": "驗證狀態", "gross_pct": "毛報酬%",
+                            "net_pct": "估計淨報酬%",
+                            "worst_close_drawdown_pct": "最差收盤回撤%",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.download_button(
+                        "下載固定持有期研究樣本",
+                        horizons.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"v22_horizon_research_{latest}.csv",
+                        mime="text/csv", key="v22_horizon_download",
+                    )
+            st.caption(
+                "資料缺漏直接顯示「行情不連續」，未到期顯示「尚未到期」。"
+                "不含除權息還原、滑價、最低手續費、盤中成交價與基準指數，"
+                "因此尚不能證明選股成功率或優於大盤。"
+            )
 
 st.divider()
 with st.expander("📖 產業熱度與 V1.5.3 模式說明"):
