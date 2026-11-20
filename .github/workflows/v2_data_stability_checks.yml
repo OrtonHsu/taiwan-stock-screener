@@ -22,6 +22,9 @@ on:
       - 'tpex_7713_guarded_repair.py'
       - 'test_tpex_7713_guarded_repair.py'
       - 'test_twse_schedule_resilience.py'
+      - 'entry_timing.py'
+      - 'test_entry_timing.py'
+      - 'app.py'
       - '.github/workflows/v2_twse_mar_jun_auto.yml'
       - 'test_daily_gap_audit.py'
       - '.github/workflows/v2_data_stability_checks.yml'
@@ -40,7 +43,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py test_tpex_7713_guarded_repair.py test_twse_schedule_resilience.py
+      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py test_tpex_7713_guarded_repair.py test_twse_schedule_resilience.py test_entry_timing.py
 
   recovery-status:
     needs: tests
