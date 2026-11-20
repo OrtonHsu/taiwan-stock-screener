@@ -91,16 +91,19 @@ def _fixed_horizon_rows(record, strategy, entry_day, entry_close, history,
     if entry_day not in index or entry_close is None:
         return []
     start = index[entry_day]
-    if entry_day not in history or abs(history[entry_day] - float(entry_close)) > 0.011:
-        # Repaired official closes conflicting with paper entry must be audited.
-        return []
+    # Official snapshots can later be corrected. Do NOT silently remove
+    # conflicting paper fills from the denominator.
+    entry_mismatch = (
+        entry_day not in history
+        or abs(history[entry_day] - float(entry_close)) > 0.011
+    )
     out = []
     for horizon in HORIZONS:
         end = start + horizon
         done = end < len(dates)
         evaluation_date = dates[end] if done else None
         window = dates[start:end + 1] if done else []
-        continuous = done and all(d in history for d in window)
+        continuous = done and not entry_mismatch and all(d in history for d in window)
         gross = net = dd = None
         if continuous:
             exit_close = history[evaluation_date]
@@ -113,7 +116,8 @@ def _fixed_horizon_rows(record, strategy, entry_day, entry_close, history,
             "cohort": record["cohort"], "strategy": strategy,
             "entry_date": entry_day, "entry_close": round(float(entry_close), 4),
             "horizon": horizon, "evaluation_date": evaluation_date,
-            "status": ("已完成" if continuous else
+            "status": ("進場價與官方資料不一致" if entry_mismatch else
+                       "已完成" if continuous else
                        "行情不連續" if done else "尚未到期"),
             "gross_pct": gross, "net_pct": net,
             "worst_close_drawdown_pct": dd,
