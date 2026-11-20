@@ -144,7 +144,7 @@ def test_narrow_breakout_is_observation_not_buy_signal():
 
 def test_wide_support_distance_is_not_called_chasing():
     prices, dates = sample_prices(last=104)
-    prices.loc[prices.date == dates[-5], "close"] = 90.0
+    prices.loc[prices.date == dates[-5], "close"] = 95.0
     result = evaluate_entry_timing(prices, dates)
     assert len(result) == 1
     stock = result.iloc[0]
