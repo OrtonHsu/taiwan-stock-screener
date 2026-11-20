@@ -144,3 +144,24 @@ python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audi
 - 提供假設性「若已有部位，連續兩日收盤跌破MA20可作趨勢失效檢討」說明；**未建立真實持倉識別或自動退出委託**。型態失效觀察價不是停損價或保證成交價。
 - **尚未回測**，上列所有百分比只是待驗證的預設研究假設。下一階段需完整市場交易日、調整後行情、明確隔日成交模型、實際交易成本／滑價及無未來資料洩漏的滾動回測，並與「空手／基準指數／舊版訊號」比較。嚴禁把目前分類當成功率、預測報酬或買入訊號。
 - 這次只更改純計算模組與Streamlit顯示；不修改行情回補、Supabase、Vault、Cron或下單邏輯。
+
+
+
+## 2026-11-20：V2.1 模擬持倉自動追蹤（研究用途，無實際下單）
+
+新增 \`paper_tracker_core.py\`、\`v21_paper_tracker.py\`、\`sql/v21_paper_tracking.sql\` 與 \`.github/workflows/v21_paper_tracking.yml\`，並在首頁的收合區顯示 V2.1 模擬追蹤結果。
+
+資料模型位於 **不對外公開的 \`stock_research\` schema**：
+
+- \`simulation_positions\`：永不改寫原始訊號日期／價格、策略版本、每次模擬進出場及結案理由；同策略同市場同股票同時間只允許一筆活躍部位，使用唯一部分索引防重複開倉。
+- \`simulation_daily\`：每個完整雙市場交易日觀察每個已存在模擬部位；若某日個股缺價，不假設曾成交，也不編造價格。
+- \`simulation_runs\`：一個策略版本、同一個市場日僅能建立一次正式候選名單；手動或自動重跑不重複開倉、不可事後篡改訊號。
+- 每日新候選最多5筆，所有追蹤中的模擬部位最多25筆；同檔結案後要過至少5個已核對完整市場日，才能建立新一輪候選。
+- 源頭來自 \`evaluate_entry_timing\` + \`plan_trend_entries\`，並以 \`tw_market_calendar.latest_due_market_date\`、TWSE>=900／TPEx>=700、完整雙市場日>=65 與近26日連續個股收盤價為門檻，拒絕使用未完成或未公布的行情。新訊號**只為當下最近完整市場日**產生，不會從已有行情中回頭挑選「已知結果好」的舊訊號。
+- 訊號當日只記錄 \`pending_entry\`，**下一個完整市場日收盤價**才建立模擬代理進場價；若該日個股缺價則標記 \`skipped\`。已有持倉若連續兩個完整市場日收盤在MA20下方，標記 \`pending_exit\`，**下一個完整市場日收盤價**才記錄代理出場價。官方資料不足時不虛構進出場。
+- 費率預設買進手續費0.1425%、賣出手續費0.1425%、賣出證交稅0.3%。另可能存在手續費折扣、最低手續費、滑價、撮合限制、除權息、流動性問題，**本工具仍不是可執行淨績效或真實勝率**。
+- \`workflow_run\` 只在每日更新 GitHub 工作流程成功完成後觸發自動追蹤；手動觸發 \`workflow_dispatch\` 預設 \`--dry-run\`，只有明確選擇 \`write=true\` 才寫入。單一 GitHub concurrency group 及 PostgreSQL advisory transaction lock 雙重避免併發寫入。此流程**不改動** \`public.prices\`、TWSE/TPEx 歷史回補、Vault、Supabase Cron、GitHub 原有行情更新。
+- **安全啟用順序**：合併 PR、CI 通過；由授權管理員在 PostgreSQL 執行一次 \`sql/v21_paper_tracking.sql\` 建立 private RLS tables；手動 dry-run 確認資料完整；再用當日正式 \`--write\` 或讓後續成功的每日更新自行觸發。網址沒有承諾券商功能，永遠不應與券商憑證連動。
+- 2026 年交易日曆目前僅驗證到 2026 年，跨年前**必須核對 2027 年 TWSE/TPEx 休市日（包含臨時休市）**，否則程式會拒絕在未知日曆下執行，不會臆測交易日。
+
+**待辦（不宣稱已完成）**：歷史資料完整性與除權息還原、OHLC／next-open 可成交模型、含滑價與分批部位的投組回測、3/5/10/20日固定持有期訊號評估、與加權指數比較、walk-forward out-of-sample、跨年度日曆更新。V2.1 第一版只記錄前瞻研究樣本，不會因近期幾筆好運而自稱能穩定獲利。
