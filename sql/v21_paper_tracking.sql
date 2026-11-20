@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS stock_research.simulation_positions (
     signal_date DATE NOT NULL,
     signal_close NUMERIC(16,4) NOT NULL CHECK (signal_close > 0),
     signal_reason TEXT NOT NULL,
+    next_session_check TEXT NOT NULL,
+    invalidation_reference NUMERIC(16,4) NOT NULL CHECK (invalidation_reference > 0),
     status TEXT NOT NULL DEFAULT 'pending_entry'
         CHECK (status IN ('pending_entry','open','pending_exit','closed','skipped')),
     entry_date DATE,
