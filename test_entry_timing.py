@@ -117,3 +117,14 @@ def test_market_and_code_validation_does_not_mix_in_legacy_quotes():
     mixed = pd.concat([prices, copies], ignore_index=True)
     output = evaluate_entry_timing(mixed, dates)
     assert set(output.market) == {"TWSE"}
+
+
+
+def test_streamlit_entry_tab_is_syntactically_valid():
+    import ast
+    from pathlib import Path
+
+    app_code = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+    ast.parse(app_code)
+    assert "🧭 進場節奏" in app_code
+    assert "evaluate_entry_timing(" in app_code
