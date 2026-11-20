@@ -29,6 +29,9 @@ on:
       - 'paper_tracker_core.py'
       - 'v21_paper_tracker.py'
       - 'test_v21_paper_tracker.py'
+      - 'daily_eod_guard.py'
+      - 'test_daily_eod_guard.py'
+      - '.github/workflows/update.yml'
       - '.github/workflows/v21_paper_tracking.yml'
       - 'app.py'
       - '.github/workflows/v2_twse_mar_jun_auto.yml'
@@ -49,7 +52,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py test_tpex_7713_guarded_repair.py test_twse_schedule_resilience.py test_entry_timing.py test_trend_following.py test_v21_paper_tracker.py
+      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py test_tpex_7713_guarded_repair.py test_twse_schedule_resilience.py test_entry_timing.py test_trend_following.py test_v21_paper_tracker.py test_daily_eod_guard.py
 
   recovery-status:
     needs: tests

@@ -3,7 +3,18 @@ name: Update Taiwan Stock Data
 
 on:
   workflow_dispatch:
-  
+  # On merging a reliability repair to main, perform one catch-up run.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/update.yml'
+      - 'daily_update.py'
+      - 'daily_eod_guard.py'
+  # Verified historical recovery continues to run even when GitHub's EOD
+  # schedule is delayed. Use successful completions as fallback wakeups.
+  workflow_run:
+    workflows: ["V2 TWSE Mar-Jun Auto Recovery"]
+    types: [completed]
   schedule:
     - cron: '30 9 * * 1-5'   # 台灣 17:30
     - cron: '17 11 * * 1-5'  # 台灣 19:17 備援
@@ -13,9 +24,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Applies to schedule, dispatch, fallback and deploy catch-up.
+  group: taiwan-stock-daily-verified-snapshot
+  cancel-in-progress: false
+
 jobs:
   daily_update:
     name: Update TWSE and TPEx Daily
+    # Only our default-branch historical recovery is a trusted wakeup.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -28,12 +50,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Fetch and store daily market data
+      - name: Check complete market coverage before official fetch
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
-          python daily_update.py
+          python daily_eod_guard.py
 
   history_backfill:
     name: Manual TWSE History Backfill
