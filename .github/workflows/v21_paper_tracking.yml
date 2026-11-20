@@ -48,3 +48,9 @@ jobs:
           fi
           echo "V2.1 paper tracker mode=$mode; NO BROKER CONNECTIONS OR ORDERS"
           python v21_paper_tracker.py "$mode"
+      - name: Read-only V2.2 next-day confirmation and horizon summary
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
+          python v22_research_report.py

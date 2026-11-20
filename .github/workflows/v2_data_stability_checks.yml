@@ -31,6 +31,9 @@ on:
       - 'test_v21_paper_tracker.py'
       - 'daily_eod_guard.py'
       - 'test_daily_eod_guard.py'
+      - 'v22_signal_validation.py'
+      - 'v22_research_report.py'
+      - 'test_v22_signal_validation.py'
       - '.github/workflows/update.yml'
       - '.github/workflows/v21_paper_tracking.yml'
       - 'app.py'
@@ -52,7 +55,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py test_tpex_7713_guarded_repair.py test_twse_schedule_resilience.py test_entry_timing.py test_trend_following.py test_v21_paper_tracker.py test_daily_eod_guard.py
+      - run: python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audit.py test_official_gap_verify.py test_tpex_7713_safe_preview.py test_tpex_7713_guarded_repair.py test_twse_schedule_resilience.py test_entry_timing.py test_trend_following.py test_v21_paper_tracker.py test_daily_eod_guard.py test_v22_signal_validation.py
 
   recovery-status:
     needs: tests
