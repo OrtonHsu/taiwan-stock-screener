@@ -384,9 +384,10 @@ with tab_old:
 
 with tab_timing:
     st.write(
-        "將盤後訊號分成「回測初步止跌／收盤突破觀察／等待確認／追價風險」。"
+        "將盤後訊號分成「回測初步止跌／收盤突破觀察／等待確認／追價過熱／支撐距離偏大」。"
         "這是研究分類，不是明日買入指令或命中率。"
     )
+    st.caption(f"本次進場節奏基準日：{latest}（最新已確認的完整雙市場資料日）")
     st.caption(
         "只使用截至最新完整市場日的收盤價、成交量與成交金額；"
         "突破參考價與均量均排除訊號日。沒有盤中高低價、K 棒或除權息還原。"
@@ -413,9 +414,9 @@ with tab_timing:
         else:
             stage_values = [
                 "回測初步止跌", "收盤突破觀察", "等待止跌確認",
-                "等待突破確認", "追價風險偏高",
+                "等待突破確認", "追價風險偏高", "支撐距離偏大",
             ]
-            overview = st.columns(3)
+            overview = st.columns(4)
             overview[0].metric(
                 "回測初步止跌", int((timing_all.stage == stage_values[0]).sum())
             )
@@ -424,6 +425,9 @@ with tab_timing:
             )
             overview[2].metric(
                 "追價風險偏高", int((timing_all.stage == stage_values[4]).sum())
+            )
+            overview[3].metric(
+                "支撐距離偏大", int((timing_all.stage == stage_values[5]).sum())
             )
             choice = st.selectbox(
                 "觀察狀態", ["全部"] + stage_values,
@@ -437,15 +441,17 @@ with tab_timing:
                 st.info("最新交易日沒有符合這個狀態的股票。")
             else:
                 cols = [
-                    "market", "code", "name", "stage", "close",
-                    "reference_label", "reference_price", "volume_ratio",
-                    "extension_pct", "change5_pct", "support_reference",
+                    "market", "code", "name", "stage", "stage_reason", "close",
+                    "reference_label", "reference_price", "breakout_pct",
+                    "volume_ratio", "extension_pct", "change5_pct", "support_reference",
                     "support_distance_pct", "history_days",
                 ]
                 labels = {
                     "market": "市場", "code": "代號", "name": "名稱",
-                    "stage": "目前狀態", "close": "最新收盤",
+                    "stage": "目前狀態", "stage_reason": "判斷依據",
+                    "close": "最新收盤",
                     "reference_label": "關鍵參考", "reference_price": "參考價格",
+                    "breakout_pct": "距前20日收盤高點%",
                     "volume_ratio": "量比（對前20日）",
                     "extension_pct": "MA20乖離%",
                     "change5_pct": "近5日收盤漲幅%",
@@ -471,6 +477,7 @@ with tab_timing:
                     with st.expander(
                         f"{stock['code']} {stock['name']}｜{stock['stage']}"
                     ):
+                        st.write(f"**判斷依據：** {stock['stage_reason']}")
                         st.write(f"**下一步觀察：** {stock['next_check']}")
                         x, y, z = st.columns(3)
                         x.metric("最新收盤", f"{stock['close']:.2f}")
@@ -479,6 +486,7 @@ with tab_timing:
                             f"{stock['reference_price']:.2f}",
                         )
                         z.metric("前20日均量倍數", f"{stock['volume_ratio']:.2f}")
+                        st.write(f"**距前20日最高收盤：** {stock['breakout_pct']:+.2f}%")
                         st.write(
                             f"**MA5 / MA20 / MA60：** "
                             f"{stock['ma5']:.2f} / {stock['ma20']:.2f} / "
@@ -491,6 +499,7 @@ with tab_timing:
                         )
                         st.caption(stock["data_quality"])
                 st.warning(
+                    "追價過熱與支撐距離偏大是不同風險；數字不等於虧損機率。"
                     "突破與止跌僅代表截至當日的收盤條件；隔日可能跳空或跌破參考價。"
                     "目前長期資料仍在回補，未進行績效校準，不能將狀態視為上漲機率。"
                 )

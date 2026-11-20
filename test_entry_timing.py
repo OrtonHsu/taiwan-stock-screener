@@ -128,3 +128,46 @@ def test_streamlit_entry_tab_is_syntactically_valid():
     ast.parse(app_code)
     assert "🧭 進場節奏" in app_code
     assert "evaluate_entry_timing(" in app_code
+
+
+
+def test_narrow_breakout_is_observation_not_buy_signal():
+    prices, dates = sample_prices(last=104.2)
+    result = evaluate_entry_timing(prices, dates)
+    assert len(result) == 1
+    stock = result.iloc[0]
+    assert stock["stage"] == "收盤突破觀察"
+    assert 0 < stock["breakout_pct"] < 1
+    assert "幅度尚不足1%" in stock["next_check"]
+    assert "突破前20日最高收盤" in stock["stage_reason"]
+
+
+def test_wide_support_distance_is_not_called_chasing():
+    prices, dates = sample_prices(last=104)
+    prices.loc[prices.date == dates[-5], "close"] = 95.0
+    result = evaluate_entry_timing(prices, dates)
+    assert len(result) == 1
+    stock = result.iloc[0]
+    assert stock["stage"] == "支撐距離偏大"
+    assert stock["support_distance_pct"] > 8
+    assert stock["extension_pct"] < 8
+    assert stock["change5_pct"] < 12
+    assert "距收盤支撐參考" in stock["stage_reason"]
+
+
+def test_overbought_price_can_have_multiple_reasons():
+    prices, dates = sample_prices(last=130)
+    result = evaluate_entry_timing(prices, dates)
+    assert len(result) == 1
+    stock = result.iloc[0]
+    assert stock["stage"] == "追價風險偏高"
+    assert "MA20正乖離" in stock["stage_reason"]
+    assert "近5日收盤漲幅" in stock["stage_reason"]
+
+
+def test_dashboard_exposes_the_risk_reason_and_current_data_date():
+    from pathlib import Path
+    app_code = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+    assert '"stage_reason": "判斷依據"' in app_code
+    assert "支撐距離偏大" in app_code
+    assert "本次進場節奏基準日" in app_code

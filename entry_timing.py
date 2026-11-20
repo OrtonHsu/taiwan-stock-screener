@@ -12,9 +12,9 @@ import pandas as pd
 
 
 ENTRY_COLUMNS = [
-    "date", "market", "code", "name", "close", "stage", "next_check",
+    "date", "market", "code", "name", "close", "stage", "stage_reason", "next_check",
     "reference_label", "reference_price", "ma5", "ma20", "ma60",
-    "prior20_high", "volume_ratio", "extension_pct", "change5_pct",
+    "prior20_high", "breakout_pct", "volume_ratio", "extension_pct", "change5_pct",
     "support_reference", "support_distance_pct", "history_days",
     "avg_turnover", "data_quality",
 ]
@@ -25,6 +25,7 @@ STAGE_ORDER = {
     "等待止跌確認": 2,
     "等待突破確認": 3,
     "追價風險偏高": 4,
+    "支撐距離偏大": 5,
 }
 
 
@@ -125,17 +126,32 @@ def evaluate_entry_timing(
         change5 = (close / float(close_s.iloc[-6]) - 1) * 100
         # Historical closing-price reference, not an executable stop price.
         support = min(ma20 * 0.98, prior10_low * 0.99, close * 0.999)
-        support_distance = (close / close - support / close) * 100
+        support_distance = (close - support) / close * 100
+        breakout_pct = (close / prior20_high - 1) * 100
 
         # Focus on stable/upward regimes; don't portray downtrends as bargains.
         rising_trend = ma20 > old_ma20 and ma20 >= 0.99 * ma60
         if not rising_trend or close < 0.98 * ma60:
             continue
 
-        if extension > 8 or change5 > 12 or support_distance > 8:
+        if extension > 8 or change5 > 12:
             stage = "追價風險偏高"
             ref_label, ref_price = "MA20（僅參考）", ma20
-            next_check = "股價乖離、短漲幅或距收盤支撐過遠，先等整理／重新評估"
+            flags = []
+            if extension > 8:
+                flags.append(f"MA20正乖離{extension:.1f}%（>8%）")
+            if change5 > 12:
+                flags.append(f"近5日收盤漲幅{change5:.1f}%（>12%）")
+            if support_distance > 8:
+                flags.append(f"距收盤支撐參考{support_distance:.1f}%（>8%）")
+            stage_reason = "；".join(flags)
+            next_check = "避免只因放量大漲追價；等待乖離收斂或重新建立較近的收盤支撐"
+        elif support_distance > 8:
+            # A wide close-to-reference gap is not evidence of overbought prices.
+            stage = "支撐距離偏大"
+            ref_label, ref_price = "收盤支撐參考", support
+            stage_reason = f"距收盤支撐參考{support_distance:.1f}%（>8%），並非一定過熱"
+            next_check = "先等待支撐位置重新建立；參考支撐不是保證能成交的停損價"
         elif (
             close > prior20_high
             and volume_ratio >= 1.5
@@ -144,7 +160,12 @@ def evaluate_entry_timing(
         ):
             stage = "收盤突破觀察"
             ref_label, ref_price = "前20日最高收盤", prior20_high
-            next_check = "隔日避免無條件追價；觀察回測突破參考價是否守住"
+            stage_reason = f"突破前20日最高收盤{breakout_pct:+.2f}%；量比{volume_ratio:.2f}倍"
+            next_check = (
+                "突破幅度尚不足1%；先觀察隔日收盤能否續守突破參考價，避免追價"
+                if breakout_pct < 1
+                else "觀察後續收盤能否守住突破參考價；不代表隔日適合追高"
+            )
         elif (
             abs(extension) <= 3
             and close >= prev_close
@@ -155,14 +176,17 @@ def evaluate_entry_timing(
         ):
             stage = "回測初步止跌"
             ref_label, ref_price = "MA20（收盤參考）", ma20
+            stage_reason = f"收盤較前日回穩；MA20乖離{extension:+.2f}%"
             next_check = "觀察後續收盤是否續守MA20；不代表盤中低點已確認"
         elif abs(extension) <= 3.5 and close < max(prev_close, ma5):
             stage = "等待止跌確認"
             ref_label, ref_price = "MA5（收盤參考）", ma5
+            stage_reason = "收盤仍未同時高於前日收盤與MA5"
             next_check = "尚未出現收盤轉強；觀察收盤重返MA5並高於前日"
         elif -1 <= extension <= 5 and close <= prior20_high:
             stage = "等待突破確認"
             ref_label, ref_price = "前20日最高收盤", prior20_high
+            stage_reason = f"距前20日最高收盤{breakout_pct:+.2f}%；尚未符合放量突破"
             next_check = "等待收盤突破前20日高點，並比對前20日均量至少1.5倍"
         else:
             continue
@@ -174,6 +198,7 @@ def evaluate_entry_timing(
             "name": str(g["name"].iloc[-1]),
             "close": round(close, 2),
             "stage": stage,
+            "stage_reason": stage_reason,
             "next_check": next_check,
             "reference_label": ref_label,
             "reference_price": round(ref_price, 2),
@@ -181,6 +206,7 @@ def evaluate_entry_timing(
             "ma20": round(ma20, 2),
             "ma60": round(ma60, 2),
             "prior20_high": round(prior20_high, 2),
+            "breakout_pct": round(breakout_pct, 2),
             "volume_ratio": round(volume_ratio, 2),
             "extension_pct": round(extension, 2),
             "change5_pct": round(change5, 2),
