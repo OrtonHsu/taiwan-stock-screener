@@ -31,6 +31,40 @@ with st.sidebar:
 def load_industry_profiles():
     return get_industries()
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_paper_positions(db_url: str) -> pd.DataFrame:
+    """Read-only private research tracking. Never create or update a position."""
+    import psycopg
+
+    columns = [
+        "code", "name", "setup", "signal_date", "status",
+        "entry_date", "entry_close", "last_observed_date",
+        "exit_date", "net_return_pct", "unrealized_net_pct",
+    ]
+    with psycopg.connect(db_url, connect_timeout=15) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT p.code,p.name,p.setup,p.signal_date,p.status,
+                          p.entry_date,p.entry_close,p.last_observed_date,
+                          p.exit_date,p.net_return_pct,d.unrealized_net_pct
+                   FROM stock_research.simulation_positions p
+                   LEFT JOIN LATERAL (
+                     SELECT unrealized_net_pct
+                     FROM stock_research.simulation_daily x
+                     WHERE x.position_id=p.id ORDER BY asof_date DESC LIMIT 1
+                   ) d ON true
+                   WHERE p.strategy_version=%s
+                   ORDER BY
+                      CASE p.status
+                        WHEN 'open' THEN 0 WHEN 'pending_exit' THEN 1
+                        WHEN 'pending_entry' THEN 2 ELSE 3 END,
+                      p.signal_date DESC
+                   LIMIT 200""",
+                ("v2.1.0",),
+            )
+            return pd.DataFrame(cur.fetchall(), columns=columns)
+
 try:
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url:
@@ -502,6 +536,61 @@ with tab_timing:
                 "不是明日買入或獲利保證。次日行情、跳空、滑價、OHLC與除權息調整"
                 "均可能改變結果；參考價不是可保證成交的停損價。"
             )
+
+
+    with st.expander("📒 V2.1 模擬追蹤（非實際持股）", expanded=False):
+        try:
+            simulation = load_paper_positions(database_url)
+        except Exception:
+            # Do not leak connection strings or private database metadata.
+            st.info("模擬追蹤資料庫尚未啟用或目前無法讀取；其他選股功能不受影響。")
+            simulation = pd.DataFrame()
+        if simulation.empty:
+            st.caption("目前尚無模擬追蹤紀錄，成功更新完整行情後才會建立。")
+        else:
+            p, q, r = st.columns(3)
+            p.metric("追蹤中", int(simulation.status.isin(["open", "pending_exit"]).sum()))
+            q.metric("等待進場代理價", int((simulation.status == "pending_entry").sum()))
+            r.metric("已結案／缺價取消", int(simulation.status.isin(["closed", "skipped"]).sum()))
+            status_labels = {
+                "pending_entry": "等待次一交易日",
+                "open": "模擬追蹤中",
+                "pending_exit": "等待模擬出場",
+                "closed": "模擬已結案",
+                "skipped": "T+1缺價未成交",
+            }
+            showing = simulation.head(30).copy()
+            showing["state_label"] = showing["status"].map(status_labels)
+            closed = showing.status.eq("closed")
+            showing["research_return"] = pd.to_numeric(
+                showing["unrealized_net_pct"], errors="coerce"
+            )
+            showing.loc[closed, "research_return"] = pd.to_numeric(
+                showing.loc[closed, "net_return_pct"], errors="coerce"
+            )
+            showing["research_return"] = showing["research_return"].round(2)
+            shown_cols = [
+                "code", "name", "setup", "signal_date", "state_label",
+                "entry_close", "last_observed_date", "research_return",
+            ]
+            st.dataframe(
+                showing[shown_cols].rename(columns={
+                    "code": "代號", "name": "名稱", "setup": "原始訊號",
+                    "signal_date": "訊號日", "state_label": "模擬狀態",
+                    "entry_close": "T+1代理進場價", "last_observed_date": "追蹤至",
+                    "research_return": "扣費後估計報酬%",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "最多顯示30筆近期紀錄；同一策略同一檔股票不重複開倉。"
+                "持有中的報酬是以當日收盤價假設立即出場的估算，"
+                "已結案才是依預設規則的模擬報酬，並非真實交易績效。"
+            )
+        st.caption(
+            "全程無券商連線或自動下單；使用次日收盤價作為模擬成交代理，"
+            "已計入預設手續費與證交稅，但不含滑價、最低手續費及除權息還原。"
+        )
 
 st.divider()
 with st.expander("📖 產業熱度與 V1.5.3 模式說明"):
