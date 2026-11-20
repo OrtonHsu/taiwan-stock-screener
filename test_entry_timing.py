@@ -171,3 +171,23 @@ def test_dashboard_exposes_the_risk_reason_and_current_data_date():
     assert '"stage_reason": "判斷依據"' in app_code
     assert "支撐距離偏大" in app_code
     assert "本次進場節奏基準日" in app_code
+
+
+
+def test_dashboard_prioritizes_compact_watchlist_over_advanced_detail():
+    import ast
+    from pathlib import Path
+    app_code = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+    ast.parse(app_code)
+    assert 'st.tabs(["🎯 今日觀察", "🧰 進階分析"])' in app_code
+    assert 'with tab_advanced:' in app_code
+    assert 'focus.head(10)' in app_code
+    assert '🔎 查看全部分類、詳細數據與下載' in app_code
+    assert 'expanded=False' in app_code
+    assert 'st.download_button(' in app_code
+    assert 'evaluate_entry_timing(' in app_code
+    # Existing research tabs remain reachable rather than being deleted.
+    assert all(s in app_code for s in (
+        'with tab_a:', 'with tab_b:', 'with tab_ma:',
+        'with tab_risk:', 'with tab_old:',
+    ))
