@@ -11,6 +11,7 @@ from screener import rank_stocks
 from v15_strategy import rank_v15
 from ma_convergence import scan_ma_dual
 from entry_timing import evaluate_entry_timing
+from trend_following import plan_trend_entries
 from storage import Store
 from industry_heat import get_industries, calculate_industry_heat
 
@@ -392,37 +393,40 @@ with tab_timing:
                     recognized, valid_days,
                     min_history=min_history, min_amount=turnover * 10000,
                 )
+                plans_all = plan_trend_entries(timing_all)
             except Exception as exc:
                 st.error(f"進場節奏計算失敗：{exc}")
                 timing_all = pd.DataFrame()
+                plans_all = pd.DataFrame()
 
         if timing_all.empty:
             st.info("今天沒有通過資料與趨勢條件的股票；不必為了進場而放寬標準。")
         else:
-            focus = timing_all[timing_all["stage"].isin(
-                ["回測初步止跌", "收盤突破觀察"]
-            )].copy()
-            waiting = timing_all[timing_all["stage"].isin(
-                ["等待止跌確認", "等待突破確認"]
-            )].copy()
-            risky = timing_all[timing_all["stage"].isin(
-                ["追價風險偏高", "支撐距離偏大"]
-            )].copy()
+            focus = plans_all[
+                plans_all["decision"] == "趨勢進場研究候選"
+            ].copy()
+            waiting = plans_all[
+                plans_all["decision"] == "等待確認"
+            ].copy()
+            risky = plans_all[
+                plans_all["decision"] == "暫不追價"
+            ].copy()
 
             x, y, z = st.columns(3)
-            x.metric("初步觀察", len(focus))
+            x.metric("趨勢研究候選", len(focus))
             y.metric("等待確認", len(waiting))
-            z.metric("風險警示", len(risky))
+            z.metric("暫不追價", len(risky))
 
             if focus.empty:
-                st.info("目前沒有符合「回測初步止跌」或「收盤突破觀察」的股票。")
+                st.info("今天沒有同時通過多頭排列、進場型態與風險距離的候選。不必強迫進場。")
             else:
-                st.write("**今日優先觀察**")
-                cols = ["code", "name", "stage", "close", "reference_price", "stage_reason"]
+                st.write("**今日趨勢進場研究候選（尚未驗證獲利能力）**")
+                cols = ["code", "name", "stage", "close", "invalidation_reference", "reason"]
                 labels = {
-                    "code": "代號", "name": "名稱", "stage": "狀態",
-                    "close": "收盤", "reference_price": "觀察參考價",
-                    "stage_reason": "判斷依據",
+                    "code": "代號", "name": "名稱", "stage": "型態",
+                    "close": "訊號日收盤",
+                    "invalidation_reference": "型態失效觀察價",
+                    "reason": "符合原因",
                 }
                 st.dataframe(
                     focus.head(10)[cols].rename(columns=labels),
@@ -430,11 +434,16 @@ with tab_timing:
                 )
                 for _, stock in focus.head(5).iterrows():
                     with st.expander(f"{stock['code']} {stock['name']}｜下一步觀察條件"):
-                        st.write(stock["next_check"])
+                        st.write(stock["next_session_check"])
                         st.caption(
-                            f"MA20乖離 {stock['extension_pct']:+.2f}%｜"
+                            f"MA20 {stock['ma20']:.2f}｜"
                             f"量比 {stock['volume_ratio']:.2f} 倍｜"
                             f"距參考支撐 {stock['support_distance_pct']:.2f}%"
+                        )
+                        st.caption(
+                            "續抱／出場研究規則：已有部位時，持續監測MA20；"
+                            "若連續兩個完整交易日收盤跌破MA20，重新評估趨勢。"
+                            "此規則尚未通過回測，不保證成交或獲利。"
                         )
 
             with st.expander("🔎 查看全部分類、詳細數據與下載", expanded=False):
@@ -489,8 +498,9 @@ with tab_timing:
                         "最新完整市場日以外的行情已排除。"
                     )
             st.caption(
-                "「初步觀察」不是建議買入；無完整OHLC、除權息還原，"
-                "長期歷史資料仍在驗證。參考價並非停損保證成交價。"
+                "「趨勢進場研究候選」只表示條件達到尚未回測的研究規則，"
+                "不是明日買入或獲利保證。次日行情、跳空、滑價、OHLC與除權息調整"
+                "均可能改變結果；參考價不是可保證成交的停損價。"
             )
 
 st.divider()
