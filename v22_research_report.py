@@ -74,7 +74,12 @@ def main():
                 "- 不含除權息與滑價，不可視為實際獲利率。\n"
             )
             if not summary.empty:
-                f.write("\n" + summary.to_markdown(index=False) + "\n")
+                for row in summary.to_dict("records"):
+                    f.write(
+                        f"- {row['策略']}／{row['交易日']}日："
+                        f"樣本{row['已到期樣本']}、"
+                        f"平均淨報酬{row['平均淨報酬%']}%\n"
+                    )
 
 
 if __name__ == "__main__":
