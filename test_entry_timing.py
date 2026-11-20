@@ -80,7 +80,7 @@ def test_invalid_inputs_and_no_histories():
         evaluate_entry_timing(prices, dates, min_history=60)
     with pytest.raises(ValueError, match="成交金額"):
         evaluate_entry_timing(prices, dates, min_amount=-1)
-    with pytest.raises(ValueError, match="必要欄位"):
+    with pytest.raises(ValueError, match="行情欄位"):
         evaluate_entry_timing(prices.drop(columns=["volume"]), dates)
     assert evaluate_entry_timing(prices.iloc[:0], dates).empty
 
