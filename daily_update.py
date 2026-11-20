@@ -14,6 +14,7 @@ import requests
 
 from screener import num
 from storage import Store
+from tw_market_calendar import latest_due_market_date
 
 
 SOURCES = {
@@ -556,7 +557,8 @@ def main():
         ZoneInfo("Asia/Taipei")
     )
 
-    today = eligible_market_day(now)
+    # TWSE/TPEX holiday and emergency closure reference, not weekday guessing.
+    today = latest_due_market_date(now)
     print(
         f"DAILY_TARGET run_at={now.isoformat()} "
         f"target={today}",
