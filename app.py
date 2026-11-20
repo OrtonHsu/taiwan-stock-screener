@@ -14,10 +14,9 @@ from entry_timing import evaluate_entry_timing
 from storage import Store
 from industry_heat import get_industries, calculate_industry_heat
 
-st.set_page_config(page_title="台股盤後選股 V1.5.3", page_icon="📈", layout="wide")
-st.title("📈 台股盤後選股 V1.5.3")
-st.caption("起漲前期｜強勢回檔｜三線蓄勢／突破｜追高風險｜V1.4 強勢突破｜產業熱度｜無自動下單")
-st.info("V1.5.3 為盤後研究訊號，尚未經完整歷史回測；分數不是成功率，均線糾結不代表未來一定上漲。")
+st.set_page_config(page_title="台股｜盤後觀察", page_icon="📈", layout="wide")
+st.title("📈 台股｜盤後觀察")
+st.caption("先看今日觀察候選，其他研究功能收在進階分析。盤後研究訊號，非買賣指令。")
 
 with st.sidebar:
     st.header("⚙️ 選股設定")
@@ -128,47 +127,48 @@ with st.spinner("讀取官方產業分類並計算熱度..."):
     except Exception as exc:
         industry_error = str(exc)
 
-st.subheader("📊 最新行情概況")
-a, b, c = st.columns(3)
-a.metric("最新資料日期", latest)
-b.metric("累積交易日期", f"{trading_days:,}")
-c.metric("最新行情股票", f"{latest_count:,}")
-a, b = st.columns(2)
-a.metric("上市 TWSE", f"{market_counts.get('TWSE', 0):,}")
-b.metric("上櫃 TPEX", f"{market_counts.get('TPEX', 0):,}")
-other_count = len(prices[prices["date"] == latest][["market", "code"]].drop_duplicates()) - latest_count
-if other_count > 0:
-    st.warning(f"最新日期另有 {other_count} 筆非 TWSE/TPEX 市場標記；已從 V1.5 排名排除。")
-if latest != today:
-    st.info(f"行情日期為 {latest}；可能因休市或尚未更新，請依交易所交易日確認。")
+with st.expander("📊 資料覆蓋率、歷史完整度與產業熱度", expanded=False):
+    st.subheader("📊 最新行情概況")
+    a, b, c = st.columns(3)
+    a.metric("最新資料日期", latest)
+    b.metric("累積交易日期", f"{trading_days:,}")
+    c.metric("最新行情股票", f"{latest_count:,}")
+    a, b = st.columns(2)
+    a.metric("上市 TWSE", f"{market_counts.get('TWSE', 0):,}")
+    b.metric("上櫃 TPEX", f"{market_counts.get('TPEX', 0):,}")
+    other_count = len(prices[prices["date"] == latest][["market", "code"]].drop_duplicates()) - latest_count
+    if other_count > 0:
+        st.warning(f"最新日期另有 {other_count} 筆非 TWSE/TPEX 市場標記；已從 V1.5 排名排除。")
+    if latest != today:
+        st.info(f"行情日期為 {latest}；可能因休市或尚未更新，請依交易所交易日確認。")
 
-st.divider()
-st.subheader("🗂️ 歷史資料完整度")
-history_counts = recognized.groupby(["market", "code"])["date"].nunique().reset_index(name="history_days")
-coverage = latest_prices[["market", "code"]].drop_duplicates().merge(history_counts, on=["market", "code"], how="left")
-qualified = int((coverage["history_days"] >= min_history).sum())
-coverage_pct = qualified / latest_count * 100 if latest_count else 0
-st.progress(min(1.0, coverage_pct / 100))
-st.write(f"已有 **{qualified:,} / {latest_count:,}** 檔累積至少 **{min_history}** 個行情交易日（{coverage_pct:.1f}%）。")
-st.caption("累積天數不保證最近六日完整，也尚未進行全面除權息還原。")
+    st.divider()
+    st.subheader("🗂️ 歷史資料完整度")
+    history_counts = recognized.groupby(["market", "code"])["date"].nunique().reset_index(name="history_days")
+    coverage = latest_prices[["market", "code"]].drop_duplicates().merge(history_counts, on=["market", "code"], how="left")
+    qualified = int((coverage["history_days"] >= min_history).sum())
+    coverage_pct = qualified / latest_count * 100 if latest_count else 0
+    st.progress(min(1.0, coverage_pct / 100))
+    st.write(f"已有 **{qualified:,} / {latest_count:,}** 檔累積至少 **{min_history}** 個行情交易日（{coverage_pct:.1f}%）。")
+    st.caption("累積天數不保證最近六日完整，也尚未進行全面除權息還原。")
 
-st.divider()
-st.subheader("🔥 產業熱度指數")
-st.caption("0～100 分的自訂活躍度與相對強弱指標，不是資金淨流入百分比或隔日上漲機率。")
-if industry_error:
-    st.warning(f"產業資料暫不可用：{industry_error}")
-if profiles.empty:
-    st.info("官方產業分類未取得；個股選股仍可使用。")
-else:
-    valid_heat = heat[heat["status"] == "可計算"].copy() if not heat.empty else pd.DataFrame()
-    h1, h2 = st.columns(2)
-    h1.metric("官方產業種類", profiles["industry"].nunique())
-    h2.metric("已有熱度分數產業", len(valid_heat))
-    if valid_heat.empty:
-        st.info("最近六日行情或產業／全市場覆蓋率不足，暫無可計算分數。")
+    st.divider()
+    st.subheader("🔥 產業熱度指數")
+    st.caption("0～100 分的自訂活躍度與相對強弱指標，不是資金淨流入百分比或隔日上漲機率。")
+    if industry_error:
+        st.warning(f"產業資料暫不可用：{industry_error}")
+    if profiles.empty:
+        st.info("官方產業分類未取得；個股選股仍可使用。")
     else:
-        heat_display = valid_heat[["industry", "industry_heat", "coverage_pct"]].rename(columns={"industry": "產業", "industry_heat": "熱度分數（0～100）", "coverage_pct": "資料覆蓋率（%）"})
-        st.dataframe(heat_display, use_container_width=True, hide_index=True)
+        valid_heat = heat[heat["status"] == "可計算"].copy() if not heat.empty else pd.DataFrame()
+        h1, h2 = st.columns(2)
+        h1.metric("官方產業種類", profiles["industry"].nunique())
+        h2.metric("已有熱度分數產業", len(valid_heat))
+        if valid_heat.empty:
+            st.info("最近六日行情或產業／全市場覆蓋率不足，暫無可計算分數。")
+        else:
+            heat_display = valid_heat[["industry", "industry_heat", "coverage_pct"]].rename(columns={"industry": "產業", "industry_heat": "熱度分數（0～100）", "coverage_pct": "資料覆蓋率（%）"})
+            st.dataframe(heat_display, use_container_width=True, hide_index=True)
 
 
 def attach_industry(frame):
@@ -205,14 +205,12 @@ if not classic_all.empty:
 dual = attach_industry(dual_all)
 classic = attach_industry(classic_all)
 
-st.divider()
-st.subheader("🎯 V1.5.3 多模式選股")
-st.caption("模式分數是啟發式排序；均線糾結與多頭轉強標籤並非買入建議。")
-
-tab_timing, tab_a, tab_b, tab_ma, tab_risk, tab_old = st.tabs([
-    "🧭 進場節奏", "🌱 起漲前期", "🎯 強勢回檔", "🧲 三線糾結",
-    "🚦 追高警示", "🏆 V1.4 突破榜"
-])
+tab_timing, tab_advanced = st.tabs(["🎯 今日觀察", "🧰 進階分析"])
+with tab_advanced:
+    tab_a, tab_b, tab_ma, tab_risk, tab_old = st.tabs([
+        "🌱 起漲前期", "🎯 強勢回檔", "🧲 三線糾結",
+        "🚦 追高警示", "🏆 V1.4 突破榜"
+    ])
 
 
 def show_v15_table(frame, key):
@@ -383,126 +381,117 @@ with tab_old:
                 st.caption("隔日參考價不代表委託價格；跳空、滑價與流動性可能影響成交。")
 
 with tab_timing:
-    st.write(
-        "將盤後訊號分成「回測初步止跌／收盤突破觀察／等待確認／追價過熱／支撐距離偏大」。"
-        "這是研究分類，不是明日買入指令或命中率。"
-    )
-    st.caption(f"本次進場節奏基準日：{latest}（最新已確認的完整雙市場資料日）")
-    st.caption(
-        "只使用截至最新完整市場日的收盤價、成交量與成交金額；"
-        "突破參考價與均量均排除訊號日。沒有盤中高低價、K 棒或除權息還原。"
-    )
+    st.subheader("🧭 進場節奏")
+    st.caption(f"本次進場節奏基準日：{latest}｜最新完整市場日的收盤資料，非盤中即時訊號")
     if len(valid_days) < 26:
-        st.warning("完整雙市場交易日不足 26 天，進場判斷暫停；請先補齊行情。")
+        st.warning("完整市場交易日不足26天，暫停進場判斷；不以缺漏資料勉強產生訊號。")
     else:
-        with st.spinner("確認最近 26 個完整市場日並計算進場節奏..."):
+        with st.spinner("整理盤後觀察名單..."):
             try:
                 timing_all = evaluate_entry_timing(
                     recognized, valid_days,
-                    min_history=min_history,
-                    min_amount=turnover * 10000,
+                    min_history=min_history, min_amount=turnover * 10000,
                 )
             except Exception as exc:
                 st.error(f"進場節奏計算失敗：{exc}")
                 timing_all = pd.DataFrame()
 
         if timing_all.empty:
-            st.info(
-                "目前沒有通過近期資料連續性與趨勢條件的研究候選。"
-                "這不代表市場沒有機會，也不應降低資料門檻硬找進場點。"
-            )
+            st.info("今天沒有通過資料與趨勢條件的股票；不必為了進場而放寬標準。")
         else:
-            stage_values = [
-                "回測初步止跌", "收盤突破觀察", "等待止跌確認",
-                "等待突破確認", "追價風險偏高", "支撐距離偏大",
-            ]
-            overview = st.columns(4)
-            overview[0].metric(
-                "回測初步止跌", int((timing_all.stage == stage_values[0]).sum())
-            )
-            overview[1].metric(
-                "收盤突破觀察", int((timing_all.stage == stage_values[1]).sum())
-            )
-            overview[2].metric(
-                "追價風險偏高", int((timing_all.stage == stage_values[4]).sum())
-            )
-            overview[3].metric(
-                "支撐距離偏大", int((timing_all.stage == stage_values[5]).sum())
-            )
-            choice = st.selectbox(
-                "觀察狀態", ["全部"] + stage_values,
-                key="entry_timing_stage_filter",
-            )
-            timing_shown = (
-                timing_all if choice == "全部"
-                else timing_all[timing_all.stage == choice].copy()
-            )
-            if timing_shown.empty:
-                st.info("最新交易日沒有符合這個狀態的股票。")
+            focus = timing_all[timing_all["stage"].isin(
+                ["回測初步止跌", "收盤突破觀察"]
+            )].copy()
+            waiting = timing_all[timing_all["stage"].isin(
+                ["等待止跌確認", "等待突破確認"]
+            )].copy()
+            risky = timing_all[timing_all["stage"].isin(
+                ["追價風險偏高", "支撐距離偏大"]
+            )].copy()
+
+            x, y, z = st.columns(3)
+            x.metric("初步觀察", len(focus))
+            y.metric("等待確認", len(waiting))
+            z.metric("風險警示", len(risky))
+
+            if focus.empty:
+                st.info("目前沒有符合「回測初步止跌」或「收盤突破觀察」的股票。")
             else:
-                cols = [
-                    "market", "code", "name", "stage", "stage_reason", "close",
-                    "reference_label", "reference_price", "breakout_pct",
-                    "volume_ratio", "extension_pct", "change5_pct", "support_reference",
-                    "support_distance_pct", "history_days",
-                ]
+                st.write("**今日優先觀察**")
+                cols = ["code", "name", "stage", "close", "reference_price", "stage_reason"]
                 labels = {
-                    "market": "市場", "code": "代號", "name": "名稱",
-                    "stage": "目前狀態", "stage_reason": "判斷依據",
-                    "close": "最新收盤",
-                    "reference_label": "關鍵參考", "reference_price": "參考價格",
-                    "breakout_pct": "距前20日收盤高點%",
-                    "volume_ratio": "量比（對前20日）",
-                    "extension_pct": "MA20乖離%",
-                    "change5_pct": "近5日收盤漲幅%",
-                    "support_reference": "收盤支撐參考",
-                    "support_distance_pct": "至參考支撐距離%",
-                    "history_days": "歷史觀測日數",
+                    "code": "代號", "name": "名稱", "stage": "狀態",
+                    "close": "收盤", "reference_price": "觀察參考價",
+                    "stage_reason": "判斷依據",
                 }
                 st.dataframe(
-                    timing_shown.head(40)[cols].rename(columns=labels),
+                    focus.head(10)[cols].rename(columns=labels),
                     use_container_width=True, hide_index=True,
                 )
-                st.caption(
-                    f"共有 {len(timing_shown)} 檔；表格最多顯示 40 檔。"
-                    "所有價格均為盤後研究參考，不是隔日委託價格或停損保證。"
-                )
-                st.download_button(
-                    "📥 下載完整進場節奏研究表",
-                    data=timing_shown.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"entry_timing_{latest}.csv",
-                    mime="text/csv", key="entry_timing_download",
-                )
-                for _, stock in timing_shown.head(8).iterrows():
-                    with st.expander(
-                        f"{stock['code']} {stock['name']}｜{stock['stage']}"
-                    ):
-                        st.write(f"**判斷依據：** {stock['stage_reason']}")
-                        st.write(f"**下一步觀察：** {stock['next_check']}")
-                        x, y, z = st.columns(3)
-                        x.metric("最新收盤", f"{stock['close']:.2f}")
-                        y.metric(
-                            stock["reference_label"],
-                            f"{stock['reference_price']:.2f}",
+                for _, stock in focus.head(5).iterrows():
+                    with st.expander(f"{stock['code']} {stock['name']}｜下一步觀察條件"):
+                        st.write(stock["next_check"])
+                        st.caption(
+                            f"MA20乖離 {stock['extension_pct']:+.2f}%｜"
+                            f"量比 {stock['volume_ratio']:.2f} 倍｜"
+                            f"距參考支撐 {stock['support_distance_pct']:.2f}%"
                         )
-                        z.metric("前20日均量倍數", f"{stock['volume_ratio']:.2f}")
-                        st.write(f"**距前20日最高收盤：** {stock['breakout_pct']:+.2f}%")
-                        st.write(
-                            f"**MA5 / MA20 / MA60：** "
-                            f"{stock['ma5']:.2f} / {stock['ma20']:.2f} / "
-                            f"{stock['ma60']:.2f}"
-                        )
-                        st.write(
-                            f"**MA20乖離：** {stock['extension_pct']:+.2f}%｜"
-                            f"**距收盤支撐參考：** "
-                            f"{stock['support_distance_pct']:.2f}%"
-                        )
-                        st.caption(stock["data_quality"])
-                st.warning(
-                    "追價過熱與支撐距離偏大是不同風險；數字不等於虧損機率。"
-                    "突破與止跌僅代表截至當日的收盤條件；隔日可能跳空或跌破參考價。"
-                    "目前長期資料仍在回補，未進行績效校準，不能將狀態視為上漲機率。"
+
+            with st.expander("🔎 查看全部分類、詳細數據與下載", expanded=False):
+                stage_values = [
+                    "回測初步止跌", "收盤突破觀察", "等待止跌確認",
+                    "等待突破確認", "追價風險偏高", "支撐距離偏大",
+                ]
+                choice = st.selectbox(
+                    "觀察狀態", ["全部"] + stage_values,
+                    key="entry_timing_stage_filter",
                 )
+                timing_shown = (
+                    timing_all if choice == "全部"
+                    else timing_all[timing_all["stage"] == choice].copy()
+                )
+                if timing_shown.empty:
+                    st.info("這個分類目前沒有股票。")
+                else:
+                    cols = [
+                        "market", "code", "name", "stage", "stage_reason",
+                        "close", "reference_label", "reference_price",
+                        "breakout_pct", "volume_ratio", "extension_pct",
+                        "change5_pct", "support_reference",
+                        "support_distance_pct", "history_days",
+                    ]
+                    labels = {
+                        "market": "市場", "code": "代號", "name": "名稱",
+                        "stage": "目前狀態", "stage_reason": "判斷依據",
+                        "close": "最新收盤",
+                        "reference_label": "關鍵參考",
+                        "reference_price": "參考價格",
+                        "breakout_pct": "距前20日收盤高點%",
+                        "volume_ratio": "量比（對前20日）",
+                        "extension_pct": "MA20乖離%",
+                        "change5_pct": "近5日收盤漲幅%",
+                        "support_reference": "收盤支撐參考",
+                        "support_distance_pct": "至參考支撐距離%",
+                        "history_days": "歷史觀測日數",
+                    }
+                    st.dataframe(
+                        timing_shown.head(40)[cols].rename(columns=labels),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.download_button(
+                        "📥 下載完整研究表",
+                        data=timing_shown.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"entry_timing_{latest}.csv",
+                        mime="text/csv", key="entry_timing_download",
+                    )
+                    st.caption(
+                        f"符合分類：{len(timing_shown)} 檔；表格最多顯示40檔。"
+                        "最新完整市場日以外的行情已排除。"
+                    )
+            st.caption(
+                "「初步觀察」不是建議買入；無完整OHLC、除權息還原，"
+                "長期歷史資料仍在驗證。參考價並非停損保證成交價。"
+            )
 
 st.divider()
 with st.expander("📖 產業熱度與 V1.5.3 模式說明"):
