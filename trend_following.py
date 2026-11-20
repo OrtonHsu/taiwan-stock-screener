@@ -40,6 +40,9 @@ def plan_trend_entries(timing: pd.DataFrame) -> pd.DataFrame:
     if not required.issubset(timing.columns):
         raise ValueError(f"進場研究資料缺少欄位：{sorted(required - set(timing.columns))}")
 
+    if timing["date"].astype(str).nunique() != 1:
+        raise ValueError("進場計畫只接受單一已驗證訊號日期")
+
     candidates = timing.copy()
     for k in ("close", "ma20", "ma60", "prior20_high", "volume_ratio",
               "breakout_pct", "extension_pct", "change5_pct",
