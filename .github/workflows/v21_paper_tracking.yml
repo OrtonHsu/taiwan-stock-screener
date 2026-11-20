@@ -1,0 +1,50 @@
+name: V2.1 Paper Tracking (Research Only)
+
+on:
+  # Only a successful same-repository daily updater may commit simulations.
+  workflow_run:
+    workflows: ["Update Taiwan Stock Data"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Explicitly commit V2.1 paper records (default is read-only preview)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v21-paper-tracking
+  cancel-in-progress: false
+
+jobs:
+  paper_tracker:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Advance existing paper episodes and record fresh research signals
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_WRITE: ${{ inputs.write }}
+        shell: bash
+        run: |
+          test -n "$DATABASE_URL" || (echo 'Missing DATABASE_URL' && exit 1)
+          mode=--dry-run
+          if [[ "$EVENT_NAME" == "workflow_run" ]] || [[ "$MANUAL_WRITE" == "true" ]]; then
+            mode=--write
+          fi
+          echo "V2.1 paper tracker mode=$mode; NO BROKER CONNECTIONS OR ORDERS"
+          python v21_paper_tracker.py "$mode"
