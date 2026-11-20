@@ -165,3 +165,20 @@ python -m pytest -q test_screener.py test_recovery_status.py test_daily_gap_audi
 - 2026 年交易日曆目前僅驗證到 2026 年，跨年前**必須核對 2027 年 TWSE/TPEx 休市日（包含臨時休市）**，否則程式會拒絕在未知日曆下執行，不會臆測交易日。
 
 **待辦（不宣稱已完成）**：歷史資料完整性與除權息還原、OHLC／next-open 可成交模型、含滑價與分批部位的投組回測、3/5/10/20日固定持有期訊號評估、與加權指數比較、walk-forward out-of-sample、跨年度日曆更新。V2.1 第一版只記錄前瞻研究樣本，不會因近期幾筆好運而自稱能穩定獲利。
+
+## 2026-11-20：每日盤後行情排程備援修復
+
+**事故**：2026-11-20 台灣時間 23:06，public.prices 當日只有 TWSE 5 筆、TPEx 2 筆；Update Taiwan Stock Data 當晚三個預定排程無執行紀錄，而 V2 TWSE Mar-Jun Auto Recovery 仍持續成功。回補的少量當日行情不是完整盤後快照。V2.1 正確維持 pending_entry，不應用部分行情計算模擬成交。
+
+**變更**：
+
+- update.yml 保留原本的 17:30、19:17、21:37（台灣時間）GitHub 三次排程，新增 workflow_run（只接受同儲存庫 main 分支上成功的 V2 TWSE Mar-Jun Auto Recovery）及推送到 main 時的補救執行。
+- workflow_run 與 push 補救只在台灣平日 17:00～23:59 啟動；原排程及明確手動執行可檢查最新已到期市場日，避免 GitHub 延遲執行漏日。
+- 新增 daily_eod_guard.py：每次先核對當日 TWSE 至少900、TPEx 至少700 檔；完整時不重複下載，否則呼叫原 daily_update.py 取得官方行情，重查雙市場覆蓋率後才宣布完成。從官方取得的日期、完整度、重複股票代號檢查保持不變。
+- 不同觸發方式共用 GitHub concurrency group，避免並行重複補抓。每日紀錄沿用 Store 的日期/市場/代碼 UPSERT。
+- daily_update.main 改以已核對的 TWSE 2026 市場交易日曆決定下載目標；2027 年仍未核對，必須先更新日曆才能繼續使用，不能假設平日皆開市。
+- V2.1 追蹤仍只在原本的 Update Taiwan Stock Data 成功完成後啟動，且必須自行核對完整市場日。不變更任何既有歷史回補程式、Supabase Cron 或券商相關設定。
+
+**局限**：GitHub cron 屬 best effort；新增的備援依賴既有歷史回補仍成功排程。未來歷史回補停止後，原每日排程仍存在，應另外設獨立健康監測。
+
+**驗收**：PR 測試通過並合併後，main 的 push 應啟動一次 Update Taiwan Stock Data。只有成功出現 DAILY_GUARD_RECOVERED 或 DAILY_GUARD_ALREADY_COMPLETE，並經資料庫核對兩市場日資料確實完整，才稱 2026-11-20 補救完成。若官方尚未公布或抓取失敗，保持候選等待且不得強制模擬開倉。
