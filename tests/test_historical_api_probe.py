@@ -63,7 +63,44 @@ class HistoricalProbeTests(unittest.TestCase):
         self.assertEqual(obj["http_status"], 200)
     def test_index_json_requires_date(self):
         obj = {"fields": ["日期"], "data": [["110/11/19"]]}
-        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["status"], "date_and_fields_confirmed")
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["status"], "unverified")
+    def test_index_url(self):
+        url = make_url("TWSE_index", DATES[0])
+        self.assertIn("/afterTrading/MI_INDEX?", url)
+        self.assertIn("type=IND", url)
+    def test_index_valid_nested_roc_title(self):
+        obj = {"stat": "OK", "tables": [{"title": "110年11月19日 價格指數(臺灣證券交易所)",
+            "fields": ["指數", "收盤指數", "漲跌(+-)"],
+            "data": [["發行量加權股價指數", "17,818.31", "+"]]}]}
+        result = inspect_payload(obj, DATES[0], "TWSE_index")
+        self.assertEqual(result["status"], "date_and_fields_confirmed")
+        self.assertEqual(result["index_close"], 17818.31)
+    def test_index_wrong_title_date(self):
+        obj = {"tables": [{"title": "115年11月20日 價格指數",
+            "fields": ["指數", "收盤指數"],
+            "data": [["發行量加權股價指數", "20,000"]]}]}
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["status"], "unverified")
+    def test_index_missing_target(self):
+        obj = {"tables": [{"title": "110年11月19日 價格指數",
+            "fields": ["指數", "收盤指數"], "data": [["寶島股價指數", "20,000"]]}]}
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["status"], "unverified")
+    def test_index_invalid_close(self):
+        obj = {"tables": [{"title": "110年11月19日 價格指數",
+            "fields": ["指數", "收盤指數"], "data": [["發行量加權股價指數", "--"]]}]}
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["reason"], "invalid index close")
+    def test_index_missing_close_column(self):
+        obj = {"tables": [{"title": "110年11月19日 價格指數",
+            "fields": ["指數", "漲跌"], "data": [["發行量加權股價指數", "5"]]}]}
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["status"], "unverified")
+    def test_institutional_stale_title(self):
+        obj = {"stat": "OK", "date": "20261120", "title": "115年11月20日 三大法人買賣金額統計表",
+            "fields": ["單位名稱", "買進金額", "賣出金額"],
+            "data": [["外資", "100", "90"]]}
+        self.assertEqual(inspect_payload(obj, "2025-11-20", "TWSE_institutional")["status"], "unverified")
+    def test_index_multiple_matches_rejected(self):
+        table = {"title": "110年11月19日 價格指數",
+                 "fields": ["指數", "收盤指數"], "data": [["發行量加權股價指數", "17818.31"]]}
+        self.assertEqual(inspect_payload({"tables": [table, table]}, DATES[0], "TWSE_index")["status"], "unverified")
     def test_get_only(self):
         def opener(request, timeout):
             self.assertEqual(request.get_method(), "GET")
