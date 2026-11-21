@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from v23_research_batch import calendar_days, positive_number, sample_counts, twse_counts, load_or_get
 import v23_official_sample as sampler
-from tests.test_v23_tpex_quote_audit import sample as tpex_sample
+def tpex_sample():
+    fields = ["代號","名稱","收盤","漲跌","開盤","最高","最低","均價","成交股數","成交金額(元)", "成交筆數","最後買價","最後買量(張數)","最後賣價","最後賣量(張數)", "發行股數","次日 參考價","次日 漲停價","次日 跌停價"]
+    def row(code, close, volume, amount):
+        return [code,"NAME",close,"0","---","---","---","60.97",volume,amount,"1","60","1","61","1","10000","61.30","67","55"]
+    return {"stat":"ok","date":"20260102","tables":[{"fields":fields,"data":[row("1240","10.25","1000","10250"),row("1259","---","380","23169"),row("5310","---","0","0"),row("00888","10","300","3000")]},{"fields":fields,"data":[]}]}
 
 
 class ResearchBatchTests(unittest.TestCase):
