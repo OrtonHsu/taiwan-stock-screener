@@ -149,6 +149,8 @@ def read_breadth(path: Path) -> dict[str, dict[str, float]]:
                 raise ValueError(f"Invalid/duplicate market date: {day} {market}")
             if str(row["can_gate_entries"]).lower() != "false":
                 raise ValueError("Entry gating unexpectedly enabled")
+            # Preserve first official trading day even when no prior close exists.
+            by_day[day.isoformat()]
             c = int(row["comparable"])
             up, down, flat = (int(row[k]) for k in ("advancing", "declining", "unchanged"))
             if c < 0 or min(up,down,flat) < 0 or c != up + down + flat:
