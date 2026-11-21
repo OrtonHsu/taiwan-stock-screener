@@ -18,15 +18,15 @@ MAX_BYTES = 5_000_000
 SOURCES = {
     "TWSE_stock": ("https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY", {"stockNo": "2330", "response": "json"}, "date"),
     "TWSE_turnover": ("https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK", {"response": "json"}, "date"),
-    # Candidate index endpoint. The server may return HTML/non-JSON: diagnose, never claim success.
-    "TWSE_index": ("https://www.twse.com.tw/rwd/zh/indicesReport/MI_5MINS_HIST", {"response": "json"}, "date"),
+    # Official daily index table, observed to return ten tables for historical days.
+    "TWSE_index": ("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX", {"response": "json", "type": "IND"}, "date"),
     "TWSE_institutional": ("https://www.twse.com.tw/rwd/zh/fund/BFI82U", {"type": "day", "response": "json"}, "day"),
     "TPEX_quotes": ("https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes", {"response": "json"}, "date"),
 }
 REQUIRED = {
     "TWSE_stock": ("日期", "成交股數", "成交金額", "開盤價", "最高價", "最低價", "收盤價"),
     "TWSE_turnover": ("日期", "成交金額", "發行量加權股價指數"),
-    "TWSE_index": ("日期",),
+    "TWSE_index": ("指數", "收盤指數"),
     "TWSE_institutional": ("單位名稱", "買進金額", "賣出金額"),
     "TPEX_quotes": ("代號", "收盤"),
 }
@@ -39,7 +39,9 @@ def date_tokens(day: str) -> set[str]:
     d = date.fromisoformat(day)
     roc = roc_day(day)
     return {day, day.replace("-", "/"), day.replace("-", ""),
-            roc, roc.replace("/", ""), f"{d.year-1911}/{d.month:02d}/{d.day:02d}"}
+            roc, roc.replace("/", ""), f"{d.year-1911}/{d.month:02d}/{d.day:02d}",
+            f"{d.year-1911}年{d.month}月{d.day}日",
+            f"{d.year-1911}年{d.month:02d}月{d.day:02d}日"}
 
 def make_url(source: str, day: str) -> str:
     if source not in SOURCES:
@@ -74,6 +76,44 @@ def _field_check(source: str, fields: list[str]) -> list[str]:
         return ["/".join(group) for group in groups if not any(any(alias in f for alias in group) for f in fields)]
     return [key for key in REQUIRED[source] if not any(key in f for f in fields)]
 
+def _index_evidence(payload: dict, day: str) -> dict:
+    """Validate daily index table by ROC title, target name and numeric closing value."""
+    tables = payload.get("tables")
+    if not isinstance(tables, list):
+        return {"status": "unverified", "reason": "index tables missing"}
+    matching = []
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        title = str(table.get("title", ""))
+        # A date in a generic top-level response is insufficient for this endpoint.
+        if not _date_in(title, day):
+            continue
+        fields = _fields(table)
+        if not ("指數" in fields and "收盤指數" in fields):
+            continue
+        name_col, close_col = fields.index("指數"), fields.index("收盤指數")
+        for row in table.get("data", []):
+            if not isinstance(row, list) or len(row) <= max(name_col, close_col):
+                continue
+            if str(row[name_col]).strip() not in ("發行量加權股價指數", "臺灣證券交易所發行量加權股價指數"):
+                continue
+            raw = str(row[close_col]).strip().replace(",", "")
+            try:
+                closing = float(raw)
+            except ValueError:
+                return {"status": "unverified", "reason": "invalid index close", "value": raw[:50]}
+            if not (0 < closing < float("inf")):
+                return {"status": "unverified", "reason": "invalid index close", "value": raw[:50]}
+            matching.append((title, closing))
+    if len(matching) != 1:
+        return {"status": "unverified", "reason": "requested date and target index not uniquely confirmed",
+                "matching_rows": len(matching), "table_count": len(tables)}
+    title, closing = matching[0]
+    return {"status": "date_and_fields_confirmed", "date_evidence": "table_title",
+            "index_name": "發行量加權股價指數", "index_close": closing,
+            "table_title": title[:100], "table_count": len(tables)}
+
 def inspect_payload(payload: object, requested_day: str, source: str = "TWSE_stock") -> dict:
     """Conservative validation: date + schema evidence, never trust HTTP 200 alone."""
     if source not in SOURCES:
@@ -83,6 +123,8 @@ def inspect_payload(payload: object, requested_day: str, source: str = "TWSE_sto
         return {"status": "unverified", "reason": "non-object JSON"}
     stat = str(payload.get("stat", payload.get("status", "")))
     result = {"api_status": stat[:100]}
+    if source == "TWSE_index":
+        return {**result, **_index_evidence(payload, requested_day)}
     tables = payload.get("tables")
     candidates = []
     if isinstance(payload.get("data"), list):
