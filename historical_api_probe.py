@@ -152,7 +152,7 @@ def _institutional_evidence(p, day):
         buy, sell, net = values
         if buy < 0 or sell < 0 or abs(buy-sell-net) > max(1, (buy+sell)*1e-10):
             return {"status": "unverified", "reason": "institutional amount mismatch"}
-    foreign = [c for c in categories if ("外資" in c or "外國" in c) and "自營商" not in c]
+    foreign = [c for c in categories if ("外資" in c or "外國" in c) and not c.startswith(("外資自營商", "外國自營商"))]
     if len(foreign) != 1:
         return {"status": "unverified", "reason": "foreign category not unique", "categories": categories}
     return {"status": "date_and_fields_confirmed", "date_evidence": "date_and_title",
