@@ -48,10 +48,53 @@ class HistoricalProbeTests(unittest.TestCase):
     def test_tpex_missing_fields(self):
         obj = {"date": "110/11/19", "tables": [{"fields": ["名稱"], "data": [["ABC"]]}]}
         self.assertEqual(inspect_payload(obj, DATES[0], "TPEX_quotes")["reason"], "required fields missing")
+    def institutional_fixture(self, day="2021-11-19"):
+        from datetime import date
+        d = date.fromisoformat(day)
+        return {"stat": "OK", "date": day.replace("-", ""),
+                "title": f"{d.year-1911}年{d.month}月{d.day}日 三大法人買賣金額統計表",
+                "fields": ["單位名稱", "買進金額", "賣出金額", "買賣差額"],
+                "data": [["外資及陸資(不含外資自營商)", "1,000", "900", "100"],
+                         ["投信", "500", "550", "-50"], ["自營商", "300", "280", "20"]]}
     def test_institutional_metadata_date(self):
-        obj = {"date": "110/11/19", "fields": ["單位名稱", "買進金額", "賣出金額"],
-               "data": [["外資", "100", "90"]]}
-        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["status"], "date_and_fields_confirmed")
+        result = inspect_payload(self.institutional_fixture(), DATES[0], "TWSE_institutional")
+        self.assertEqual(result["status"], "date_and_fields_confirmed")
+        self.assertEqual(result["foreign_category"], "外資及陸資(不含外資自營商)")
+    def test_institutional_url_daydate(self):
+        url = make_url("TWSE_institutional", DATES[0])
+        self.assertIn("dayDate=20211119", url)
+        self.assertNotIn("&day=", url)
+    def test_institutional_four_years(self):
+        for day in DATES:
+            self.assertEqual(inspect_payload(self.institutional_fixture(day), day, "TWSE_institutional")["status"], "date_and_fields_confirmed")
+    def test_institutional_wrong_date(self):
+        obj = self.institutional_fixture()
+        obj["date"] = "20261120"
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["status"], "unverified")
+    def test_institutional_wrong_title(self):
+        obj = self.institutional_fixture()
+        obj["title"] = "115年11月20日 三大法人買賣金額統計表"
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["status"], "unverified")
+    def test_institutional_missing_field(self):
+        obj = self.institutional_fixture()
+        obj["fields"].pop()
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["status"], "unverified")
+    def test_institutional_invalid_amount(self):
+        obj = self.institutional_fixture()
+        obj["data"][0][1] = "--"
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["reason"], "institutional invalid amount")
+    def test_institutional_mismatched_net(self):
+        obj = self.institutional_fixture()
+        obj["data"][0][3] = "999"
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["reason"], "institutional amount mismatch")
+    def test_institutional_missing_foreign(self):
+        obj = self.institutional_fixture()
+        obj["data"][0][0] = "其他法人"
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["status"], "unverified")
+    def test_institutional_duplicate_category(self):
+        obj = self.institutional_fixture()
+        obj["data"][1][0] = obj["data"][0][0]
+        self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_institutional")["status"], "unverified")
     def test_institutional_no_date_unverified(self):
         obj = {"stat": "OK", "fields": ["單位名稱", "買進金額", "賣出金額"],
                "data": [["外資", "100", "90"]]}
@@ -93,9 +136,7 @@ class HistoricalProbeTests(unittest.TestCase):
             "fields": ["指數", "漲跌"], "data": [["發行量加權股價指數", "5"]]}]}
         self.assertEqual(inspect_payload(obj, DATES[0], "TWSE_index")["status"], "unverified")
     def test_institutional_stale_title(self):
-        obj = {"stat": "OK", "date": "20261120", "title": "115年11月20日 三大法人買賣金額統計表",
-            "fields": ["單位名稱", "買進金額", "賣出金額"],
-            "data": [["外資", "100", "90"]]}
+        obj = self.institutional_fixture("2026-11-20")
         self.assertEqual(inspect_payload(obj, "2025-11-20", "TWSE_institutional")["status"], "unverified")
     def test_index_multiple_matches_rejected(self):
         table = {"title": "110年11月19日 價格指數",
