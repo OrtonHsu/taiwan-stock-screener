@@ -20,7 +20,7 @@ SOURCES = {
     "TWSE_turnover": ("https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK", {"response": "json"}, "date"),
     # Official daily index table, observed to return ten tables for historical days.
     "TWSE_index": ("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX", {"response": "json", "type": "IND"}, "date"),
-    "TWSE_institutional": ("https://www.twse.com.tw/rwd/zh/fund/BFI82U", {"type": "day", "response": "json"}, "day"),
+    "TWSE_institutional": ("https://www.twse.com.tw/rwd/zh/fund/BFI82U", {"type": "day", "response": "json"}, "dayDate"),
     "TPEX_quotes": ("https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes", {"response": "json"}, "date"),
 }
 REQUIRED = {
@@ -114,6 +114,51 @@ def _index_evidence(payload: dict, day: str) -> dict:
             "index_name": "發行量加權股價指數", "index_close": closing,
             "table_title": title[:100], "table_count": len(tables)}
 
+def _institutional_evidence(p, day):
+    """Strictly verify BFI82U date, title, categories, and amounts."""
+    import math
+    expected = date.fromisoformat(day)
+    title = p.get("title", "")
+    if (str(p.get("date", "")) != day.replace("-", "") or
+            not isinstance(title, str) or
+            f"{expected.year-1911}年{expected.month}月{expected.day}日" not in title or
+            "三大法人" not in title):
+        return {"status": "unverified", "reason": "institutional date/title mismatch"}
+    fields = _fields(p)
+    required = ("單位名稱", "買進金額", "賣出金額", "買賣差額")
+    if any(fields.count(k) != 1 for k in required):
+        return {"status": "unverified", "reason": "institutional fields missing or duplicated"}
+    rows = p.get("data")
+    if not isinstance(rows, list) or not rows:
+        return {"status": "unverified", "reason": "institutional rows missing"}
+    idx = [fields.index(k) for k in required]
+    categories = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) <= max(idx):
+            return {"status": "unverified", "reason": "institutional malformed row"}
+        category = str(row[idx[0]]).strip()
+        if not category or category in categories:
+            return {"status": "unverified", "reason": "institutional duplicate/empty category"}
+        categories.append(category)
+        values = []
+        for col in idx[1:]:
+            raw = str(row[col]).replace(",", "").strip()
+            if not re.fullmatch(r"[+-]?[0-9]+(?:[.][0-9]+)?", raw):
+                return {"status": "unverified", "reason": "institutional invalid amount"}
+            value = float(raw)
+            if not math.isfinite(value):
+                return {"status": "unverified", "reason": "institutional invalid amount"}
+            values.append(value)
+        buy, sell, net = values
+        if buy < 0 or sell < 0 or abs(buy-sell-net) > max(1, (buy+sell)*1e-10):
+            return {"status": "unverified", "reason": "institutional amount mismatch"}
+    foreign = [c for c in categories if ("外資" in c or "外國" in c) and "自營商" not in c]
+    if len(foreign) != 1:
+        return {"status": "unverified", "reason": "foreign category not unique", "categories": categories}
+    return {"status": "date_and_fields_confirmed", "date_evidence": "date_and_title",
+            "rows": len(rows), "fields": fields, "categories": categories,
+            "foreign_category": foreign[0], "amounts_validated": True}
+
 def inspect_payload(payload: object, requested_day: str, source: str = "TWSE_stock") -> dict:
     """Conservative validation: date + schema evidence, never trust HTTP 200 alone."""
     if source not in SOURCES:
@@ -125,6 +170,8 @@ def inspect_payload(payload: object, requested_day: str, source: str = "TWSE_sto
     result = {"api_status": stat[:100]}
     if source == "TWSE_index":
         return {**result, **_index_evidence(payload, requested_day)}
+    if source == "TWSE_institutional":
+        return {**result, **_institutional_evidence(payload, requested_day)}
     tables = payload.get("tables")
     candidates = []
     if isinstance(payload.get("data"), list):
