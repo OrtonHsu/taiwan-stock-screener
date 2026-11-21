@@ -171,7 +171,8 @@ def main(argv=None):
             rows.append({"trade_date": day, "market": market, "source": origin,
                          "date_validation": ev["status"], **counts,
                          "official_security_type_verified": False,
-                         "row_date_verified": market == "TWSE"})
+                         "row_date_verified": False,
+                         "date_evidence": "TWSE_table_title" if market == "TWSE" else "TPEX_response_metadata"})
             print("CHECKED:", day, market, origin, counts, flush=True)
             if origin == "DOWNLOADED":
                 time.sleep(1.5)
